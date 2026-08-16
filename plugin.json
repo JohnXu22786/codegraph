@@ -1,0 +1,119 @@
+{
+  "name": "codegraph",
+  "displayName": "CodeGraph",
+  "version": "1.0.0",
+  "description": "Code knowledge graph plugin: indexes a codebase (symbols, call sites, module imports) into a local SQLite store and answers call/dependency questions for agents through a stdio tool server (MCP-style JSON-RPC).",
+  "license": "MIT",
+  "language": "python",
+  "requires": ">=3.10",
+  "entry": {
+    "cli": "python -m codegraph",
+    "tool_server": "python -m codegraph serve",
+    "python_api": "import codegraph"
+  },
+  "protocols": ["mcp-stdio", "json-rpc-2.0"],
+  "tools": [
+    {
+      "name": "callers",
+      "description": "List every symbol that calls the given symbol directly. Use impact for the transitive caller set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string", "description": "qualified symbol name, e.g. pkg.cart.Cart.add"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "callees",
+      "description": "List everything the given symbol calls, with resolution status for each call site.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "deps",
+      "description": "List the modules a file or package imports (its dependencies), marking resolved vs external.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "module": {"type": "string", "description": "file path (web/util.ts) or module id (pkg.cart)"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["module"]
+      }
+    },
+    {
+      "name": "dependents",
+      "description": "List the files/packages that import the given module (reverse dependencies).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "module": {"type": "string"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["module"]
+      }
+    },
+    {
+      "name": "search",
+      "description": "Full-text search over symbol names, docstrings and signatures stored in the index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "impact",
+      "description": "Transitive callers up to a depth: everything that would be affected if the symbol changed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "symbol": {"type": "string"},
+          "depth": {"type": "integer", "default": 3},
+          "limit": {"type": "integer"}
+        },
+        "required": ["symbol"]
+      }
+    },
+    {
+      "name": "overview",
+      "description": "Index statistics: file/symbol/call/import counts, resolution rates, per-language breakdown.",
+      "inputSchema": {"type": "object", "properties": {}}
+    },
+    {
+      "name": "reindex",
+      "description": "Refresh the index (incremental by default). Use force=true to re-parse every file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "force": {"type": "boolean", "default": false}
+        }
+      }
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "root": {"type": "string", "description": "project root"},
+      "db_path": {"type": "string", "description": "index database location (default <root>/.cg/cg.sqlite)"},
+      "include": {"type": "array", "items": {"type": "string"}, "description": "if non-empty, only matching paths are indexed"},
+      "exclude": {"type": "array", "items": {"type": "string"}, "description": "glob/dir patterns skipped while walking"},
+      "max_file_kb": {"type": "integer", "default": 512},
+      "incremental": {"type": "boolean", "default": true},
+      "engine": {"type": "string", "enum": ["auto", "quick", "deep"], "default": "auto"},
+      "language_map": {"type": "object"}
+    }
+  },
+  "languages": ["python", "javascript", "typescript", "go", "java", "rust"]
+}

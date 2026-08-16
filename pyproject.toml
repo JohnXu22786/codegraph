@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codegraph"
+version = "1.0.0"
+description = "Code knowledge graph for agent harnesses: parse a codebase, then answer call and dependency questions over it."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "codegraph contributors" }]
+keywords = ["code-graph", "mcp", "agent", "dsh", "tree-sitter", "sqlite"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.optional-dependencies]
+# tree-sitter grammars sharply improve extraction precision; without them the
+# built-in regex scanner keeps the plugin fully functional
+treesitter = [
+    "tree-sitter>=0.23",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-go",
+    "tree-sitter-java",
+    "tree-sitter-rust",
+]
+
+[project.scripts]
+codegraph = "codegraph.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

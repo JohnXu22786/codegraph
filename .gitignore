@@ -1,0 +1,16 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# this plugin's own data
+.cg/
+
+# tooling
+.pytest_cache/
+.tox/
+.coverage
