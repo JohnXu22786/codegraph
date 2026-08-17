@@ -130,7 +130,7 @@ dsh plugin --profile demo remove codegraph
 
 ## 配置文件
 
-`codegraph.json`（项目根目录，`codegraph init` 生成；以下为关键字段示例，`exclude` 默认值共 18 项，此处为节选）：
+`codegraph.json`（项目根目录，`codegraph init` 生成；以下为关键字段示例，`exclude` 默认值共 17 项，此处为节选）：
 
 ```json
 {
