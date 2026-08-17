@@ -6,11 +6,19 @@ build/
 dist/
 .venv/
 venv/
+.tox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # this plugin's own data
 .cg/
 
-# tooling
-.pytest_cache/
-.tox/
-.coverage
+# node (dsh bridge)
+node_modules/
+
+# editors
+.idea/
+.vscode/
