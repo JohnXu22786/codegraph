@@ -1,0 +1,14 @@
+# dsh-codegraph 的 dsh 接入层（bundle patch）。
+#
+# profile 引用本包后，加载器会把这一层插入配置树，注册 id=codegraph 的插件行；
+# `name` 指向本包（dsh-codegraph），由 Node 从 profile 目录解析到已安装的代码。
+# 插件行在 apply(ctx, config) 中把 codegraph Python CLI 暴露为 8 个 dsh 工具。
+#
+# 可用配置键（可选，全部省略即用默认值）：
+#   python —— Python 解释器命令或完整路径（默认 python / python3）
+#   root   —— 默认代码库根目录（默认取 dsh 进程当前目录；工具可按次用 root 覆盖）
+- insert:
+    - id: codegraph
+      name: dsh-codegraph
+      config:
+        root: !!js process.cwd()

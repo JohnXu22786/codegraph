@@ -1,0 +1,34 @@
+{
+  "name": "dsh-codegraph",
+  "version": "0.1.0",
+  "description": "CodeGraph for DeepSeek Harness (dsh): a Node bridge that exposes the codegraph Python CLI as dsh tools (callers / callees / deps / dependents / search / impact / overview / reindex) over a code index in SQLite.",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test \"tests/bridge.test.mjs\""
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "codegraph",
+    "code-index",
+    "call-graph",
+    "mcp"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
