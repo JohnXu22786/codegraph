@@ -75,6 +75,18 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
         elif cfg.root != str(base_root):
             cfg.db_path = str(Path(cfg.root) / ".cg" / "cg.sqlite")
 
+    # a string include/exclude (e.g. "src" instead of ["src"]) would be iterated
+    # character-by-character by the walker; fail fast so the user notices
+    for key, fallback in (("include", []), ("exclude", DEFAULT_EXCLUDES)):
+        if not isinstance(getattr(cfg, key), list) or \
+                any(not isinstance(p, str) for p in getattr(cfg, key)):
+            if cfg_file.is_file() and key in data:
+                raise ValueError(
+                    f'config field "{key}" must be a list of strings, got '
+                    f'{getattr(cfg, key)!r}'
+                )
+            setattr(cfg, key, fallback)
+
     # environment overrides beat the file
     if os.environ.get(ENV_PREFIX + "DB"):
         cfg.db_path = os.environ[ENV_PREFIX + "DB"]
