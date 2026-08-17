@@ -1,7 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
+import { cpSync, mkdtempSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import * as plugin from '../index.js'
 
@@ -46,25 +48,31 @@ test('read-only tools report a readable error before an index exists', async () 
   assert.match(res.error, /no index|index/)
 })
 
-const HAS_INDEX = existsSync(join(PROJ, '.cg', 'cg.sqlite'))
+test('codegraph_reindex builds an index, then queries work', async () => {
+  // work on a scratch copy so the fixture dir never gains a .cg/ index
+  const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-'))
+  const root = join(scratch, 'proj')
+  cpSync(PROJ, root, { recursive: true })
+  try {
+    const tools = await applyOnce({ root })
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]))
 
-test('codegraph_reindex builds an index, then queries work', { skip: !HAS_INDEX && 'fixture dir has no prebuilt index; bridge still verified statically' }, async () => {
-  const tools = await applyOnce({ root: PROJ })
-  const byName = Object.fromEntries(tools.map((t) => [t.name, t]))
+    const reindex = await byName['codegraph_reindex'].execute({})
+    assert.equal(reindex.ok, true)
+    assert.ok(reindex.data.files_scanned >= 1)
 
-  const reindex = await byName['codegraph_reindex'].execute({})
-  assert.equal(reindex.ok, true)
-  assert.ok(reindex.data.files_scanned >= 1)
+    const callers = await byName['codegraph_callers'].execute({ symbol: 'pkg.pricing.price' })
+    assert.equal(callers.ok, true)
+    assert.ok(callers.data.length >= 1)
 
-  const callers = await byName['codegraph_callers'].execute({ symbol: 'pkg.pricing.price' })
-  assert.equal(callers.ok, true)
-  assert.ok(callers.data.length >= 1)
+    const search = await byName['codegraph_search'].execute({ query: 'cart' })
+    assert.equal(search.ok, true)
+    assert.ok(search.data.length >= 1)
 
-  const search = await byName['codegraph_search'].execute({ query: 'cart' })
-  assert.equal(search.ok, true)
-  assert.ok(search.data.length >= 1)
-
-  const overview = await byName['codegraph_overview'].execute({})
-  assert.equal(overview.ok, true)
-  assert.equal(typeof overview.data.files, 'number')
+    const overview = await byName['codegraph_overview'].execute({})
+    assert.equal(overview.ok, true)
+    assert.equal(typeof overview.data.files, 'number')
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 })
