@@ -200,7 +200,7 @@ codegraph export json -o graph.json   # structured data: files/symbols/calls/imp
 │   └── server/               # stdio tool server
 │       ├── handlers.py       #   tool definitions/execution/rendering
 │       └── mcp.py            #   JSON-RPC protocol layer
-└── tests/                    # 123 unit/integration tests (+ node:test bridge cases)
+└── tests/                    # 124 unit/integration tests (+ node:test bridge cases)
 ```
 
 ## Tests
