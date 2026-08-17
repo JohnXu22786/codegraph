@@ -127,7 +127,8 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
                 results.append({"path": r["path"], "module": r["module"],
                                 "line": r["line"]})
                 seen.add(r["path"])
-    return results
+    # the member-import pass appends past the first LIMIT; cap the union
+    return results[:limit]
 
 
 def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 200):

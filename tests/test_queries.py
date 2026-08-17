@@ -90,6 +90,13 @@ class QueryTest(unittest.TestCase):
         got2 = sorted(r["path"] for r in rows2)
         self.assertEqual(got2, ["web/app.js", "web/index.ts"])
 
+    def test_dependents_limit_caps_the_union(self):
+        """The member-import pass must not push results past the limit."""
+        rows = query_dependents(self.store, "pkg.pricing", limit=1)
+        self.assertEqual([r["path"] for r in rows], ["app.py"])
+        rows = query_dependents(self.store, "pkg.pricing", limit=0)
+        self.assertEqual(rows, [])
+
     def test_impact_transitive_callers(self):
         rows = query_impact(self.store, "pkg.cart.Cart", depth=3)
         got = sorted((r["depth"], r["qualname"]) for r in rows)
