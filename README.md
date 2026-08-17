@@ -123,10 +123,12 @@ dsh plugin --profile demo add github:JohnXu22786/codegraph
 Remove with:
 
 ```bash
-dsh plugin --profile demo remove codegraph
+dsh plugin --profile demo remove dsh-codegraph
 ```
 
 See **[docs/dsh-integration.md](docs/dsh-integration.md)** for the full integration guide.
+
+The repo also ships a self-contained Node bridge (`index.js` + `dsh.bundle` + `cordis.patch.yml`): once installed, the eight codegraph tools are registered directly as `codegraph_callers` / `codegraph_callees` / `codegraph_deps` / `codegraph_dependents` / `codegraph_search` / `codegraph_impact` / `codegraph_overview` / `codegraph_reindex`. Each call runs the Python CLI with `--json` against the configured root (default: the harness working directory; override per call with the `root` argument). No index yet? Call `codegraph_reindex` first — read-only tools return a readable error until then.
 
 ## Configuration
 
@@ -198,7 +200,7 @@ codegraph export json -o graph.json   # structured data: files/symbols/calls/imp
 │   └── server/               # stdio tool server
 │       ├── handlers.py       #   tool definitions/execution/rendering
 │       └── mcp.py            #   JSON-RPC protocol layer
-└── tests/                    # 112 unit/integration tests
+└── tests/                    # 123 unit/integration tests (+ node:test bridge cases)
 ```
 
 ## Tests
