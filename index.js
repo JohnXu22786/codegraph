@@ -74,6 +74,10 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error)
 }
 
+function objectSchema(properties, required = []) {
+  return { type: 'object', properties, required }
+}
+
 /**
  * One persistent `python -m codegraph serve` process for one root.
  * Requests are serialized by RootSession because the Python stdio server is
@@ -475,17 +479,21 @@ async function executeCodegraph(config, args, execContext, request) {
 
 function makeQueryTool(config, spec) {
   const { name: toolName, subcommand, argName, args: extraArgs } = spec
-  const parameters = {
+  const properties = {
     root: { type: 'string', description: '代码库根目录（默认取插件配置或当前目录）' },
     timeoutMs: { type: 'integer', description: '本次调用超时毫秒数（默认 120000）' },
   }
-  if (argName) parameters[argName] = { type: 'string', required: true, description: spec.argHelp ?? '符号或模块名' }
-  for (const a of extraArgs) parameters[a.key] = { type: 'integer' }
+  const required = []
+  if (argName) {
+    properties[argName] = { type: 'string', description: spec.argHelp ?? '符号或模块名' }
+    required.push(argName)
+  }
+  for (const a of extraArgs) properties[a.key] = { type: 'integer' }
 
   return {
     name: toolName,
     description: spec.description,
-    parameters,
+    parameters: objectSchema(properties, required),
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [
@@ -533,10 +541,10 @@ function makeOverviewTool(config) {
   return {
     name: 'codegraph_overview',
     description: '返回代码索引统计：文件/符号/调用/导入数、解析率、语言分布、根目录与最近索引时间。',
-    parameters: {
+    parameters: objectSchema({
       root: { type: 'string', description: '代码库根目录' },
       timeoutMs: { type: 'integer', description: '本次调用超时毫秒数（默认 120000）' },
-    },
+    }),
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [
@@ -564,11 +572,11 @@ function makeReindexTool(config) {
   return {
     name: 'codegraph_reindex',
     description: '刷新代码索引（唯一可写工具）：增量模式只重解析内容哈希变化的文件；force=true 全量重解析。索引建立后才能使用其他只读工具。',
-    parameters: {
+    parameters: objectSchema({
       force: { type: 'boolean', description: 'true 强制全量重解析（默认 false 增量）' },
       root: { type: 'string', description: '代码库根目录' },
       timeoutMs: { type: 'integer', description: '本次调用超时毫秒数（默认 120000）' },
-    },
+    }),
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [
