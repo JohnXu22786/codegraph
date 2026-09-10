@@ -128,7 +128,7 @@ dsh plugin --profile demo remove dsh-codegraph
 
 See **[docs/dsh-integration.md](docs/dsh-integration.md)** for the full integration guide.
 
-The repo also ships a self-contained Node bridge (`index.js` + `dsh.bundle` + `cordis.patch.yml`): once installed, the eight codegraph tools are registered directly as `codegraph_callers` / `codegraph_callees` / `codegraph_deps` / `codegraph_dependents` / `codegraph_search` / `codegraph_impact` / `codegraph_overview` / `codegraph_reindex`. Each call runs the Python CLI with `--json` against the configured root (default: the harness working directory; override per call with the `root` argument). No index yet? Call `codegraph_reindex` first — read-only tools return a readable error until then.
+The repo also ships a self-contained Node bridge (`index.js` + `dsh.bundle` + `cordis.patch.yml`): once installed, the eight codegraph tools are registered directly as `codegraph_callers` / `codegraph_callees` / `codegraph_deps` / `codegraph_dependents` / `codegraph_search` / `codegraph_impact` / `codegraph_overview` / `codegraph_reindex`. The bridge keeps one Python stdio server alive per configured root and sends JSON requests to it (default root: the harness working directory; override per call with the `root` argument). Requests for the same root are serialized, and each request supports a timeout and cancellation. If the server cannot start, the bridge falls back to the one-shot Python CLI. No index yet? Call `codegraph_reindex` first — read-only tools return a readable error until then.
 
 ## Configuration
 
@@ -200,7 +200,7 @@ codegraph export json -o graph.json   # structured data: files/symbols/calls/imp
 │   └── server/               # stdio tool server
 │       ├── handlers.py       #   tool definitions/execution/rendering
 │       └── mcp.py            #   JSON-RPC protocol layer
-└── tests/                    # 124 unit/integration tests (+ node:test bridge cases)
+└── tests/                    # 129 unit/integration tests (+ node:test bridge cases)
 ```
 
 ## Tests

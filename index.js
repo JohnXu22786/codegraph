@@ -1,26 +1,15 @@
 /**
  * dsh-codegraph —— codegraph 的 dsh（DeepSeek Harness）接入层。
  *
- * 本模块是纯 Node bridge：不在 Node 侧复刻任何解析/查询逻辑，而是把仓库里的
- * codegraph Python 核心（`python -m codegraph`，package 位于 src/codegraph）
- * 以子进程方式拉起，把 8 个工具能力暴露为 dsh 工具：
- *
- *   codegraph_callers / codegraph_callees / codegraph_deps /
- *   codegraph_dependents / codegraph_search / codegraph_impact /
- *   codegraph_overview / codegraph_reindex
- *
- * 每个工具按次执行 `python -m codegraph`，带 `--json` 取回结构化的本次查询
- * 结果，与 `codegraph serve` 的 MCP 对应工具语义一致。CLI 退出码非零
- * （如尚未建索引、符号不存在）时返回可读错误（value.ok=false + error），
- * 不会让宿主进程崩溃。只有 reindex 会写索引，其余均为只读。
- *
- * 配置（cordis.patch.yml 的 config 键，均可省略）：
- *   python —— Python 解释器命令或完整路径（默认 python / python3，按平台选）
- *   root   —— 默认代码库根目录（默认 process.cwd()；工具可按次用 root 覆盖）
+ * Python core runs as one long-lived stdio server per project root.  Keeping
+ * the process alive reuses the server-side query cache and avoids paying the
+ * interpreter startup cost for every tool call.  A failed server startup
+ * falls back to the one-shot CLI so an installation problem remains visible
+ * as a normal tool error.
  */
 
 import { spawn } from 'node:child_process'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const name = 'codegraph'
@@ -28,6 +17,9 @@ export const inject = ['tools']
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const SRC_DIR = join(PLUGIN_DIR, 'src')
+const DEFAULT_TIMEOUT_MS = 120000
+const MAX_STREAM_BYTES = 2 * 1024 * 1024
+const SESSIONS = new Map()
 
 /** 解析 Python 解释器：配置优先，其次按平台惯例取默认。 */
 function pythonBin(config) {
@@ -39,51 +31,9 @@ function pythonBin(config) {
 
 /** 决定的本次查询使用的代码库根目录：调用参数 > 插件配置 > 进程当前目录。 */
 function resolveRoot(config, args) {
-  if (typeof args?.root === 'string' && args.root.trim()) return args.root.trim()
-  if (config && typeof config.root === 'string' && config.root.trim()) return config.root.trim()
-  return process.cwd()
-}
-
-/** 运行 `python -m codegraph` 并把 stdout 整体作为 JSON 解析。 */
-function runCodegraph(config, argv) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(pythonBin(config), ['-m', 'codegraph', ...argv], {
-      cwd: PLUGIN_DIR,
-      env: {
-        ...process.env,
-        // 未 pip install 时，让解释器能找到 src/codegraph 包。
-        PYTHONPATH: joinPathList(SRC_DIR, process.env.PYTHONPATH),
-      },
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-    child.stdout.on('data', (chunk) => { stdout += chunk })
-    child.stderr.on('data', (chunk) => { stderr += chunk })
-    child.on('error', (err) => {
-      reject(new Error(`无法启动 Python 解释器 ${pythonBin(config)}: ${err.message}`))
-    })
-    child.on('close', (code) => {
-      const tail = (stderr || stdout).trim()
-      if (code !== 0) {
-        reject(new Error(tail || `codegraph 退出码 ${code}`))
-        return
-      }
-      if (!stdout.trim()) {
-        resolve(null)
-        return
-      }
-      try {
-        resolve(JSON.parse(stdout))
-      } catch {
-        reject(new Error(`codegraph 输出不是合法 JSON：${stdout.trim().slice(0, 200)}`))
-      }
-    })
-    child.stdin.end()
-  })
+  if (typeof args?.root === 'string' && args.root.trim()) return resolvePath(args.root.trim())
+  if (config && typeof config.root === 'string' && config.root.trim()) return resolvePath(config.root.trim())
+  return resolvePath(process.cwd())
 }
 
 /** 合成 PYTHONPATH：把 src 目录放在已有值之前（平台分隔符）。 */
@@ -92,18 +42,442 @@ function joinPathList(first, rest) {
   return rest ? `${first}${sep}${rest}` : first
 }
 
+class PersistentServerUnavailableError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'PersistentServerUnavailableError'
+    this.fallback = true
+  }
+}
+
+class StreamLimitError extends Error {
+  constructor(stream) {
+    super(`codegraph ${stream} output exceeded ${MAX_STREAM_BYTES} bytes`)
+    this.name = 'StreamLimitError'
+  }
+}
+
+function abortError(reason) {
+  if (reason instanceof Error) return reason
+  const error = new Error(typeof reason === 'string' ? reason : 'codegraph request aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+function timeoutError(timeoutMs) {
+  const error = new Error(`codegraph request timed out after ${timeoutMs} ms`)
+  error.name = 'TimeoutError'
+  return error
+}
+
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /**
- * 组装一个只读查询工具。
- * @param {object} spec
- * @param {string} spec.name          dsh 工具名
- * @param {string} spec.subcommand    CLI 子命令
- * @param {string} spec.argName       CLI 位置参数（在 --root 之前传入）
- * @param {Array<{key: string, flag?: string, backedBy?: string}>} spec.args 额外参数表
+ * One persistent `python -m codegraph serve` process for one root.
+ * Requests are serialized by RootSession because the Python stdio server is
+ * deliberately synchronous and a reindex must not race a query for the same
+ * SQLite database.
  */
+class PythonServer {
+  constructor(config, root) {
+    this.config = config
+    this.root = root
+    this.child = null
+    this.pending = new Map()
+    this.nextId = 1
+    this.stdoutBuffer = ''
+    this.stderr = ''
+    this.closed = false
+  }
+
+  _start() {
+    if (this.closed) throw new Error('codegraph bridge is closed')
+    if (this.child) return this.child
+
+    let child
+    try {
+      child = spawn(pythonBin(this.config), ['-m', 'codegraph', 'serve', '--root', this.root], {
+        cwd: PLUGIN_DIR,
+        env: {
+          ...process.env,
+          PYTHONPATH: joinPathList(SRC_DIR, process.env.PYTHONPATH),
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (error) {
+      throw new PersistentServerUnavailableError(
+        `无法启动 codegraph server：${errorText(error)}`,
+      )
+    }
+
+    this.child = child
+    this.stdoutBuffer = ''
+    this.stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      if (this.child === child) this._onStdout(chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      if (this.child === child) this._onStderr(chunk)
+    })
+    child.stdin.on('error', (error) => {
+      if (this.child === child) {
+        this._fail(new PersistentServerUnavailableError(
+          `codegraph server stdin failed: ${errorText(error)}`,
+        ))
+      }
+    })
+    child.on('error', (error) => {
+      if (this.child === child) {
+        this._fail(new PersistentServerUnavailableError(
+          `无法启动 Python 解释器 ${pythonBin(this.config)}: ${errorText(error)}`,
+        ))
+      }
+    })
+    child.on('close', (code, signal) => {
+      if (this.child !== child) return
+      this.child = null
+      const details = this.stderr.trim().slice(-2000)
+      const suffix = details ? `: ${details}` : ''
+      this._rejectPending(new PersistentServerUnavailableError(
+        `codegraph server exited (${signal ?? code ?? 'unknown'})${suffix}`,
+      ))
+    })
+    return child
+  }
+
+  _onStdout(chunk) {
+    this.stdoutBuffer += chunk
+    while (true) {
+      const newline = this.stdoutBuffer.indexOf('\n')
+      if (newline < 0) {
+        if (Buffer.byteLength(this.stdoutBuffer, 'utf8') > MAX_STREAM_BYTES) {
+          this._fail(new StreamLimitError('stdout'))
+        }
+        return
+      }
+      const line = this.stdoutBuffer.slice(0, newline)
+      this.stdoutBuffer = this.stdoutBuffer.slice(newline + 1)
+      if (Buffer.byteLength(line, 'utf8') > MAX_STREAM_BYTES) {
+        this._fail(new StreamLimitError('stdout'))
+        return
+      }
+      if (!line.trim()) continue
+      let message
+      try {
+        message = JSON.parse(line)
+      } catch {
+        this._fail(new Error(`codegraph server 输出不是合法 JSON：${line.slice(0, 200)}`))
+        return
+      }
+      const pending = this.pending.get(message.id)
+      if (!pending) continue
+      this.pending.delete(message.id)
+      pending.cleanup()
+      if (message.error) {
+        pending.reject(new Error(message.error.message || 'codegraph server request failed'))
+      } else {
+        pending.resolve(message.result)
+      }
+    }
+  }
+
+  _onStderr(chunk) {
+    this.stderr = (this.stderr + chunk).slice(-2000)
+  }
+
+  _rejectPending(error) {
+    for (const pending of this.pending.values()) {
+      pending.cleanup()
+      pending.reject(error)
+    }
+    this.pending.clear()
+  }
+
+  _terminate() {
+    const child = this.child
+    if (!child) return
+    this.child = null
+    try {
+      child.kill()
+    } catch {
+      // The process may already have exited.
+    }
+  }
+
+  _fail(error) {
+    this._rejectPending(error)
+    this._terminate()
+  }
+
+  async request(tool, args, signal) {
+    if (signal?.aborted) throw abortError(signal.reason)
+    const child = this._start()
+    const id = this.nextId++
+    return new Promise((resolve, reject) => {
+      let abortListener
+      const cleanup = () => {
+        if (abortListener) signal?.removeEventListener('abort', abortListener)
+      }
+      const pending = { resolve, reject, cleanup }
+      this.pending.set(id, pending)
+      abortListener = () => {
+        if (!this.pending.has(id)) return
+        this.pending.delete(id)
+        cleanup()
+        reject(abortError(signal.reason))
+        this._terminate()
+      }
+      if (signal) {
+        signal.addEventListener('abort', abortListener, { once: true })
+        if (signal.aborted) {
+          abortListener()
+          return
+        }
+      }
+      try {
+        child.stdin.write(JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: { name: tool, arguments: args },
+        }) + '\n')
+      } catch (error) {
+        this.pending.delete(id)
+        cleanup()
+        reject(new PersistentServerUnavailableError(`codegraph server write failed: ${errorText(error)}`))
+        this._terminate()
+      }
+    }).then((response) => {
+      if (!response) throw new Error('codegraph server returned an empty response')
+      if (response.isError) {
+        const text = response.content?.find((item) => item.type === 'text')?.text
+        throw new Error(text || 'codegraph tool failed')
+      }
+      return response.content?.find((item) => item.type === 'json')?.json ?? null
+    })
+  }
+
+  close() {
+    this.closed = true
+    this._rejectPending(abortError('codegraph bridge closed'))
+    this._terminate()
+  }
+}
+
+class RootSession {
+  constructor(config, root) {
+    this.server = new PythonServer(config, root)
+    this.tail = Promise.resolve()
+  }
+
+  enqueue(task, signal) {
+    if (signal?.aborted) return Promise.reject(abortError(signal.reason))
+
+    let resolveResult
+    let rejectResult
+    let settled = false
+    let cancelled = false
+    let abortListener
+    const result = new Promise((resolve, reject) => {
+      resolveResult = resolve
+      rejectResult = reject
+    })
+    const cleanup = () => {
+      if (abortListener) signal?.removeEventListener('abort', abortListener)
+    }
+    const settle = (fn, value) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      fn(value)
+    }
+    abortListener = () => {
+      cancelled = true
+      settle(rejectResult, abortError(signal.reason))
+    }
+    if (signal) {
+      signal.addEventListener('abort', abortListener, { once: true })
+      if (signal.aborted) {
+        abortListener()
+        return result
+      }
+    }
+
+    const run = this.tail.then(async () => {
+      if (cancelled || signal?.aborted) throw abortError(signal.reason)
+      return task()
+    })
+    this.tail = run.catch(() => undefined)
+    run.then(
+      (value) => settle(resolveResult, value),
+      (error) => settle(rejectResult, error),
+    )
+    return result
+  }
+
+  close() {
+    this.server.close()
+  }
+}
+
+function sessionKey(config, root) {
+  return `${pythonBin(config)}\0${root}`
+}
+
+function getSession(config, root) {
+  const key = sessionKey(config, root)
+  let session = SESSIONS.get(key)
+  if (!session) {
+    session = new RootSession(config, root)
+    SESSIONS.set(key, session)
+  }
+  return { key, session }
+}
+
+function requestController(signal, timeoutMs) {
+  const controller = new AbortController()
+  let timer
+  const relay = () => controller.abort(signal.reason)
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason)
+    else signal.addEventListener('abort', relay, { once: true })
+  }
+  if (timeoutMs > 0) timer = setTimeout(() => controller.abort(timeoutError(timeoutMs)), timeoutMs)
+  return {
+    signal: controller.signal,
+    cleanup() {
+      if (timer) clearTimeout(timer)
+      signal?.removeEventListener('abort', relay)
+    },
+  }
+}
+
+function requestTimeout(config, args) {
+  const value = args?.timeoutMs ?? config?.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_TIMEOUT_MS
+  return Math.max(1, Math.floor(value))
+}
+
+/** Run the old one-shot CLI, used only when the persistent server cannot start. */
+function runCodegraph(config, argv, { signal, timeoutMs } = {}) {
+  return new Promise((resolve, reject) => {
+    let child
+    try {
+      child = spawn(pythonBin(config), ['-m', 'codegraph', ...argv], {
+        cwd: PLUGIN_DIR,
+        env: {
+          ...process.env,
+          PYTHONPATH: joinPathList(SRC_DIR, process.env.PYTHONPATH),
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (error) {
+      reject(new Error(`无法启动 Python 解释器 ${pythonBin(config)}: ${errorText(error)}`))
+      return
+    }
+
+    let stdout = ''
+    let stderr = ''
+    let stdoutBytes = 0
+    let stderrBytes = 0
+    let settled = false
+    let timer
+    const finish = (fn, value) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      fn(value)
+    }
+    const terminate = () => {
+      try {
+        child.kill()
+      } catch {
+        // The process may already have exited.
+      }
+    }
+    const fail = (error) => {
+      terminate()
+      finish(reject, error)
+    }
+    const onAbort = () => fail(abortError(signal.reason))
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      stdoutBytes += Buffer.byteLength(chunk, 'utf8')
+      if (stdoutBytes > MAX_STREAM_BYTES) fail(new StreamLimitError('stdout'))
+      else stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      stderrBytes += Buffer.byteLength(chunk, 'utf8')
+      if (stderrBytes > MAX_STREAM_BYTES) fail(new StreamLimitError('stderr'))
+      else stderr += chunk
+    })
+    child.on('error', (error) => fail(new Error(`无法启动 Python 解释器 ${pythonBin(config)}: ${errorText(error)}`)))
+    child.on('close', (code) => {
+      if (settled) return
+      const tail = (stderr || stdout).trim()
+      if (code !== 0) {
+        finish(reject, new Error(tail.slice(-2000) || `codegraph 退出码 ${code}`))
+        return
+      }
+      if (!stdout.trim()) {
+        finish(resolve, null)
+        return
+      }
+      try {
+        finish(resolve, JSON.parse(stdout))
+      } catch {
+        finish(reject, new Error(`codegraph 输出不是合法 JSON：${stdout.trim().slice(0, 200)}`))
+      }
+    })
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) {
+        onAbort()
+        return
+      }
+    }
+    if (timeoutMs > 0) timer = setTimeout(() => fail(timeoutError(timeoutMs)), timeoutMs)
+    child.stdin.end()
+  })
+}
+
+async function executeCodegraph(config, args, execContext, request) {
+  const root = resolveRoot(config, args)
+  const timeoutMs = requestTimeout(config, args)
+  const controls = requestController(execContext?.signal, timeoutMs)
+  const { key, session } = getSession(config, root)
+  try {
+    return await session.enqueue(async () => {
+      try {
+        return await session.server.request(request.name, request.arguments, controls.signal)
+      } catch (error) {
+        if (!error?.fallback) throw error
+        session.close()
+        if (SESSIONS.get(key) === session) SESSIONS.delete(key)
+        return runCodegraph(config, request.argv, {
+          signal: controls.signal,
+          timeoutMs,
+        })
+      }
+    }, controls.signal)
+  } finally {
+    controls.cleanup()
+  }
+}
+
 function makeQueryTool(config, spec) {
   const { name: toolName, subcommand, argName, args: extraArgs } = spec
   const parameters = {
     root: { type: 'string', description: '代码库根目录（默认取插件配置或当前目录）' },
+    timeoutMs: { type: 'integer', description: '本次调用超时毫秒数（默认 120000）' },
   }
   if (argName) parameters[argName] = { type: 'string', required: true, description: spec.argHelp ?? '符号或模块名' }
   for (const a of extraArgs) parameters[a.key] = { type: 'integer' }
@@ -119,25 +493,37 @@ function makeQueryTool(config, spec) {
         ...(value.ok && value.data ? [{ type: 'json', json: value.data }] : []),
       ],
     },
-    async execute(args) {
+    async execute(args, execContext = {}) {
       const argv = [subcommand]
+      const rpcArgs = {}
       if (argName) {
         const v = args?.[argName]
         if (typeof v !== 'string' || !v.trim()) return { ok: false, error: `缺少必填参数 ${argName}` }
         argv.push(v.trim())
+        rpcArgs[argName] = v.trim()
       }
       for (const a of extraArgs) {
-        if (a.flag && typeof args?.[a.key] === 'number' && a.key !== 'limit') argv.push(a.flag, String(args[a.key]))
+        if (a.flag && typeof args?.[a.key] === 'number' && a.key !== 'limit') {
+          argv.push(a.flag, String(args[a.key]))
+          rpcArgs[a.key] = args[a.key]
+        }
       }
       const limit = args?.limit
-      if (typeof limit === 'number') argv.push('--limit', String(limit))
-      argv.push('--root', resolveRoot(config, args))
-      argv.push('--json')
+      if (typeof limit === 'number') {
+        argv.push('--limit', String(limit))
+        rpcArgs.limit = limit
+      }
+      const root = resolveRoot(config, args)
+      argv.push('--root', root, '--json')
       try {
-        const data = await runCodegraph(config, argv)
+        const data = await executeCodegraph(config, args, execContext, {
+          name: subcommand,
+          arguments: rpcArgs,
+          argv,
+        })
         return { ok: true, data }
-      } catch (err) {
-        return { ok: false, error: err.message }
+      } catch (error) {
+        return { ok: false, error: errorText(error) }
       }
     },
   }
@@ -147,7 +533,10 @@ function makeOverviewTool(config) {
   return {
     name: 'codegraph_overview',
     description: '返回代码索引统计：文件/符号/调用/导入数、解析率、语言分布、根目录与最近索引时间。',
-    parameters: { root: { type: 'string', description: '代码库根目录' } },
+    parameters: {
+      root: { type: 'string', description: '代码库根目录' },
+      timeoutMs: { type: 'integer', description: '本次调用超时毫秒数（默认 120000）' },
+    },
     output: {
       schema: { type: 'object', additionalProperties: true },
       render: (_args, value) => [
@@ -155,15 +544,17 @@ function makeOverviewTool(config) {
         ...(value.ok && value.data ? [{ type: 'json', json: value.data }] : []),
       ],
     },
-    async execute(args) {
-      const argv = ['status']
-      argv.push('--root', resolveRoot(config, args))
-      argv.push('--json')
+    async execute(args, execContext = {}) {
+      const root = resolveRoot(config, args)
       try {
-        const data = await runCodegraph(config, argv)
+        const data = await executeCodegraph(config, args, execContext, {
+          name: 'overview',
+          arguments: {},
+          argv: ['status', '--root', root, '--json'],
+        })
         return { ok: true, data }
-      } catch (err) {
-        return { ok: false, error: err.message }
+      } catch (error) {
+        return { ok: false, error: errorText(error) }
       }
     },
   }
@@ -176,6 +567,7 @@ function makeReindexTool(config) {
     parameters: {
       force: { type: 'boolean', description: 'true 强制全量重解析（默认 false 增量）' },
       root: { type: 'string', description: '代码库根目录' },
+      timeoutMs: { type: 'integer', description: '本次调用超时毫秒数（默认 120000）' },
     },
     output: {
       schema: { type: 'object', additionalProperties: true },
@@ -184,19 +576,27 @@ function makeReindexTool(config) {
         ...(value.ok && value.data ? [{ type: 'json', json: value.data }] : []),
       ],
     },
-    async execute(args) {
-      const argv = ['index']
-      argv.push('--root', resolveRoot(config, args))
-      argv.push('--json')
-      if (args?.force === true) argv.push('--force')
+    async execute(args, execContext = {}) {
+      const root = resolveRoot(config, args)
+      const force = args?.force === true
       try {
-        const data = await runCodegraph(config, argv)
+        const data = await executeCodegraph(config, args, execContext, {
+          name: 'reindex',
+          arguments: { force },
+          argv: ['index', '--root', root, '--json', ...(force ? ['--force'] : [])],
+        })
         return { ok: true, data }
-      } catch (err) {
-        return { ok: false, error: err.message }
+      } catch (error) {
+        return { ok: false, error: errorText(error) }
       }
     },
   }
+}
+
+/** Stop all persistent children. Useful for host shutdown and integration tests. */
+export async function close() {
+  for (const session of SESSIONS.values()) session.close()
+  SESSIONS.clear()
 }
 
 export async function apply(ctx, config = {}) {

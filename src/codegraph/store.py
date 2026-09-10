@@ -90,9 +90,12 @@ class IndexStore:
 
     def __init__(self, db_path: str):
         self.db_path = str(db_path)
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, timeout=5.0)
         self.conn.row_factory = _Row
         self.conn.isolation_level = None  # autocommit; explicit BEGIN in transaction()
+        self.conn.execute("PRAGMA busy_timeout = 5000")
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
         self.conn.commit()
@@ -169,8 +172,10 @@ class IndexStore:
     def remove_file(self, path):
         row = self.conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
         if row is None:
-            return
+            return {"file_id": None, "symbol_names": set(),
+                    "call_ids": set(), "import_ids": set()}
         fid = row["id"]
+        impact = self.clear_references_to_file(fid)
         sym_ids = [r["id"] for r in
                    self.conn.execute("SELECT id FROM symbols WHERE file_id = ?", (fid,))]
         for sid in sym_ids:
@@ -179,11 +184,57 @@ class IndexStore:
         self.conn.execute("DELETE FROM imports WHERE file_id = ?", (fid,))
         self.conn.execute("DELETE FROM symbols WHERE file_id = ?", (fid,))
         self.conn.execute("DELETE FROM files WHERE id = ?", (fid,))
+        return impact
+
+    def clear_references_to_file(self, file_id):
+        """Clear edges into a file before replacing or removing its payload.
+
+        The returned ids let an incremental resolution pass revisit only the
+        incoming edges invalidated by the change.
+        """
+        symbols = self.conn.execute(
+            "SELECT id, name FROM symbols WHERE file_id = ?", (file_id,)
+        ).fetchall()
+        symbol_ids = [row["id"] for row in symbols]
+        call_ids = set()
+        if symbol_ids:
+            placeholders = ", ".join("?" for _ in symbol_ids)
+            call_ids.update(
+                row["id"] for row in self.conn.execute(
+                    f"SELECT id FROM calls WHERE caller_id IN ({placeholders}) "
+                    f"OR callee_id IN ({placeholders})",
+                    (*symbol_ids, *symbol_ids),
+                )
+            )
+            self.conn.execute(
+                f"UPDATE calls SET caller_id = NULL WHERE caller_id IN ({placeholders})",
+                symbol_ids,
+            )
+            self.conn.execute(
+                f"UPDATE calls SET callee_id = NULL WHERE callee_id IN ({placeholders})",
+                symbol_ids,
+            )
+
+        import_ids = {
+            row["id"] for row in self.conn.execute(
+                "SELECT id FROM imports WHERE target_id = ?", (file_id,)
+            )
+        }
+        self.conn.execute(
+            "UPDATE imports SET target_id = NULL WHERE target_id = ?", (file_id,)
+        )
+        return {
+            "file_id": file_id,
+            "symbol_names": {row["name"] for row in symbols},
+            "call_ids": call_ids,
+            "import_ids": import_ids,
+        }
 
     # -- payloads -------------------------------------------------------------
 
     def replace_file_payload(self, file_id: int, scan: FileScan):
         """Replace every row derived from one file (call inside a transaction)."""
+        impact = self.clear_references_to_file(file_id)
         self.conn.execute("DELETE FROM calls WHERE file_id = ?", (file_id,))
         self.conn.execute("DELETE FROM imports WHERE file_id = ?", (file_id,))
         old = [r["id"] for r in
@@ -215,6 +266,7 @@ class IndexStore:
                 "INSERT INTO imports(file_id, module, names, kind, line) VALUES(?,?,?,?,?)",
                 (file_id, i.module, json.dumps(i.names, ensure_ascii=False), i.kind, i.line),
             )
+        return impact
 
     # -- reads -----------------------------------------------------------------
 

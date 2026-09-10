@@ -55,6 +55,11 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     discovered = discover_files(root, cfg)
     known = store.all_file_paths()
     seen = set()
+    changed_file_ids = set()
+    recheck_call_ids = set()
+    recheck_import_ids = set()
+    changed_symbol_names = set()
+    added_file = False
 
     try:
         for rel in discovered:
@@ -66,9 +71,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                 emit(f"warning: skipping {posix}: {exc}")
                 continue
             digest = _digest(data)
+            prev = store.file_by_path(posix)
 
             if not force and cfg.incremental:
-                prev = store.file_by_path(posix)
                 if prev is not None and prev["digest"] == digest:
                     report.files_skipped += 1
                     continue
@@ -83,7 +88,14 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             with store.transaction():
                 fid = store.upsert_file(posix, lang, len(data), digest,
                                         len(text.splitlines()), scan.module)
-                store.replace_file_payload(fid, scan)
+                impact = store.replace_file_payload(fid, scan)
+            changed_file_ids.add(fid)
+            recheck_call_ids.update(impact["call_ids"])
+            recheck_import_ids.update(impact["import_ids"])
+            changed_symbol_names.update(impact["symbol_names"])
+            changed_symbol_names.update(s.name for s in scan.symbols)
+            if prev is None:
+                added_file = True
             report.files_changed += 1
             report.symbols += len(scan.symbols)
             report.calls += len(scan.calls)
@@ -91,10 +103,21 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
 
         for path in sorted(known - seen):
             with store.transaction():
-                store.remove_file(path)
+                impact = store.remove_file(path)
+            recheck_call_ids.update(impact["call_ids"])
+            recheck_import_ids.update(impact["import_ids"])
+            changed_symbol_names.update(impact["symbol_names"])
             report.files_removed += 1
 
-        resolve_all(store)
+        if changed_file_ids or recheck_call_ids or recheck_import_ids:
+            resolve_all(
+                store,
+                file_ids=changed_file_ids,
+                call_ids=recheck_call_ids,
+                import_ids=recheck_import_ids,
+                symbol_names=changed_symbol_names,
+                resolve_unresolved_imports=added_file,
+            )
         store.set_meta("last_indexed", store.now_iso())
         store.conn.commit()
 

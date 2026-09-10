@@ -89,6 +89,20 @@ class StoreTest(unittest.TestCase):
         self.store = IndexStore(str(self.db))
         self.assertEqual(self.store.file_by_path("a.py").digest, "d1")
 
+    def test_sqlite_pragmas_allow_concurrent_access(self):
+        self.assertEqual(
+            self.store.conn.execute("PRAGMA journal_mode").fetchone()[0].lower(),
+            "wal",
+        )
+        self.assertEqual(
+            self.store.conn.execute("PRAGMA synchronous").fetchone()[0],
+            1,  # NORMAL
+        )
+        self.assertGreaterEqual(
+            self.store.conn.execute("PRAGMA busy_timeout").fetchone()[0],
+            5000,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
