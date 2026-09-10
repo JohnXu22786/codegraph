@@ -131,8 +131,9 @@ dsh plugin --profile demo remove dsh-codegraph
 本仓库还随附自包含的 Node 桥（`index.js` + `dsh.bundle` + `cordis.patch.yml`）：安装后
 8 个 codegraph 工具会直接注册为 `codegraph_callers` / `codegraph_callees` /
 `codegraph_deps` / `codegraph_dependents` / `codegraph_search` / `codegraph_impact` /
-`codegraph_overview` / `codegraph_reindex`。每次调用都以 `--json` 运行 Python CLI，
-针对配置的代码库根目录（默认取 dsh 进程当前目录，可用 `root` 参数按次覆盖）查询。
+`codegraph_overview` / `codegraph_reindex`。Bridge 会为每个配置的代码库根目录保持一个常驻
+Python stdio server，并向它发送 JSON 请求（默认取 dsh 进程当前目录，可用 `root` 参数按次覆盖）。
+同一根目录的请求会串行执行，每次调用都支持超时和取消；若 server 无法启动则回退到一次性 Python CLI。
 尚未建索引时先调用 `codegraph_reindex`——只读工具在此之前会返回可读的错误提示。
 
 ## 配置文件
@@ -205,7 +206,7 @@ codegraph export json -o graph.json   # 结构化数据：files/symbols/calls/im
 │   └── server/               # stdio 工具服务器
 │       ├── handlers.py       #   工具定义/执行/渲染
 │       └── mcp.py            #   JSON-RPC 协议层
-└── tests/                    # 124 个单元/集成测试（另有 node:test 桥接用例）
+└── tests/                    # 129 个单元/集成测试（另有 node:test 桥接用例）
 ```
 
 ## 测试

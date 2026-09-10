@@ -249,31 +249,91 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
-def resolve_all(store: IndexStore):
-    """Post-pass: fill target_id, then caller_id / callee_id for every edge.
+def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
+                symbol_names=(), resolve_unresolved_imports=False):
+    """Post-pass: fill target_id, then caller_id / callee_id for selected edges.
 
     Imports are resolved before calls so that first-build resolution can
-    already follow import edges between files.
+    already follow import edges between files.  ``file_ids=None`` preserves
+    the full-graph behavior for callers that explicitly request it; an
+    iterable scopes work to the changed files and invalidated incoming edges.
     """
-    for row in store.conn.execute("SELECT id, file_id, module FROM imports"):
-        target = resolve_module(store, row["file_id"], row["module"])
-        if target:
+    with store.transaction():
+        if file_ids is None:
+            import_rows = store.conn.execute(
+                "SELECT id, file_id, module FROM imports ORDER BY id"
+            ).fetchall()
+            call_rows = store.conn.execute(
+                "SELECT id, file_id, caller_name, callee FROM calls ORDER BY id"
+            ).fetchall()
+        else:
+            file_ids = set(file_ids)
+            import_ids = set(import_ids)
+            call_ids = set(call_ids)
+            if file_ids:
+                placeholders = ", ".join("?" for _ in file_ids)
+                import_ids.update(
+                    row["id"] for row in store.conn.execute(
+                        f"SELECT id FROM imports WHERE file_id IN ({placeholders})",
+                        tuple(file_ids),
+                    )
+                )
+                call_ids.update(
+                    row["id"] for row in store.conn.execute(
+                        f"SELECT id FROM calls WHERE file_id IN ({placeholders})",
+                        tuple(file_ids),
+                    )
+                )
+            if resolve_unresolved_imports:
+                import_ids.update(
+                    row["id"] for row in store.conn.execute(
+                        "SELECT id FROM imports WHERE target_id IS NULL"
+                    )
+                )
+            if symbol_names:
+                names = set(symbol_names)
+                call_ids.update(
+                    row["id"] for row in store.conn.execute(
+                        "SELECT id, callee FROM calls"
+                    ).fetchall()
+                    if last_segment(row["callee"]) in names
+                )
+            if import_ids:
+                placeholders = ", ".join("?" for _ in import_ids)
+                import_rows = store.conn.execute(
+                    f"SELECT id, file_id, module FROM imports WHERE id IN ({placeholders}) "
+                    "ORDER BY id",
+                    tuple(import_ids),
+                ).fetchall()
+            else:
+                import_rows = []
+            if call_ids:
+                placeholders = ", ".join("?" for _ in call_ids)
+                call_rows = store.conn.execute(
+                    f"SELECT id, file_id, caller_name, callee FROM calls "
+                    f"WHERE id IN ({placeholders}) ORDER BY id",
+                    tuple(call_ids),
+                ).fetchall()
+            else:
+                call_rows = []
+
+        for row in import_rows:
+            target = resolve_module(store, row["file_id"], row["module"])
             store.conn.execute(
                 "UPDATE imports SET target_id = ? WHERE id = ?", (target, row["id"])
             )
 
-    for row in store.conn.execute("SELECT id, file_id, caller_name, callee FROM calls"):
-        updates = []
-        if row["caller_name"]:
-            sym = store.conn.execute(
-                "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
-                "ORDER BY id LIMIT 1",
-                (row["file_id"], row["caller_name"]),
-            ).fetchone()
-            updates.append(("caller_id", sym["id"] if sym else None))
-        callee_id = resolve_callee(store, row["file_id"], row["callee"])
-        updates.append(("callee_id", callee_id))
-        for col, val in updates:
+        for row in call_rows:
+            caller_id = None
+            if row["caller_name"]:
+                sym = store.conn.execute(
+                    "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
+                    "ORDER BY id LIMIT 1",
+                    (row["file_id"], row["caller_name"]),
+                ).fetchone()
+                caller_id = sym["id"] if sym else None
+            callee_id = resolve_callee(store, row["file_id"], row["callee"])
             store.conn.execute(
-                f"UPDATE calls SET {col} = ? WHERE id = ?", (val, row["id"])
+                "UPDATE calls SET caller_id = ?, callee_id = ? WHERE id = ?",
+                (caller_id, callee_id, row["id"]),
             )

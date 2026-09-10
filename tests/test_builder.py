@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from codegraph.builder import build_index
 from codegraph.config import load_config
@@ -49,6 +50,13 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(report.files_removed, 0)
         self.assertEqual(report.symbols, 0)
 
+    def test_unchanged_incremental_run_skips_resolution_pass(self):
+        build_index(self._cfg())
+        with patch("codegraph.builder.resolve_all") as resolve:
+            report = build_index(self._cfg())
+        self.assertEqual(report.files_skipped, ALL_FILES)
+        resolve.assert_not_called()
+
     def test_changed_file_reparsed_only(self):
         build_index(self._cfg())
         target = self.root / "pkg" / "pricing.py"
@@ -60,6 +68,23 @@ class BuilderTest(unittest.TestCase):
         store = IndexStore(str(self._cfg().db_path))
         self.assertIsNotNone(store.symbol_by_qualname("pkg.pricing.vat"))
         store.close()
+
+    def test_changed_file_clears_incoming_edges(self):
+        build_index(self._cfg())
+        target = self.root / "pkg" / "pricing.py"
+        target.write_text(
+            '"""Price lookups for the demo shop."""\n\n'
+            'def discount(sku):\n    return 0\n',
+            encoding="utf-8",
+        )
+        build_index(self._cfg())
+        store = IndexStore(str(self._cfg().db_path))
+        try:
+            incoming = store.find_call(callee="pricing.price")
+            self.assertIsNotNone(incoming)
+            self.assertIsNone(incoming["callee_id"])
+        finally:
+            store.close()
 
     def test_deleted_file_removed(self):
         build_index(self._cfg())
@@ -99,6 +124,36 @@ class BuilderTest(unittest.TestCase):
             self.assertIsNone(imp_os["target_id"])
         finally:
             store.close()
+
+    def test_new_duplicate_symbol_invalidates_resolved_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "caller.py").write_text(
+                "def invoke():\n    return target()\n", encoding="utf-8")
+            (root / "first.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="target")
+                self.assertEqual(
+                    store.symbol_by_id(call["callee_id"]).qualname, "first.target"
+                )
+            finally:
+                store.close()
+
+            (root / "second.py").write_text(
+                "def target():\n    return 2\n", encoding="utf-8")
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNone(store.find_call(callee="target")["callee_id"])
+            finally:
+                store.close()
 
 
 if __name__ == "__main__":

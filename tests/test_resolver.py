@@ -7,7 +7,7 @@ from pathlib import Path
 
 from codegraph.builder import build_index
 from codegraph.config import load_config
-from codegraph.resolver import resolve_callee, resolve_module
+from codegraph.resolver import resolve_all, resolve_callee, resolve_module
 from codegraph.store import IndexStore
 
 from .fixtures import PROJ
@@ -167,6 +167,17 @@ class ResolverTest(unittest.TestCase):
         # rust mod declaration
         rfid = self._file_id("rustx/main.rs")
         self.assertEqual(resolve_module(self.store, rfid, "lib"), self._file_id("rustx/lib.rs"))
+
+    def test_scoped_resolution_is_atomic(self):
+        statements = []
+        self.store.conn.set_trace_callback(statements.append)
+        try:
+            resolve_all(self.store, file_ids={self._file_id("app.py")})
+        finally:
+            self.store.conn.set_trace_callback(None)
+        self.assertIsNotNone(self.store.find_call(callee="create_cart")["callee_id"])
+        self.assertIn("BEGIN IMMEDIATE", statements)
+        self.assertEqual(statements.count("COMMIT"), 1)
 
 
 if __name__ == "__main__":

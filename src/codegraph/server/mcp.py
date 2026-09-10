@@ -30,6 +30,7 @@ def _send(output_stream, payload: dict):
     line = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     try:
         output_stream.write((line + "\n").encode("utf-8"))
+        output_stream.flush()
     except BrokenPipeError:
         # the client went away; the caller will observe EOF on stdin
         pass
