@@ -59,6 +59,20 @@ test('apply registers exactly the eight documented tools', async () => {
   )
 })
 
+test('registered tools expose object parameter schemas', async () => {
+  const tools = await applyOnce()
+
+  for (const tool of tools) {
+    assert.equal(tool.parameters.type, 'object', tool.name)
+    assert.ok(tool.parameters.properties, `${tool.name} properties`)
+    assert.ok(Array.isArray(tool.parameters.required), `${tool.name} required`)
+  }
+
+  const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
+  assert.deepEqual(byName.codegraph_callers.parameters.required, ['symbol'])
+  assert.deepEqual(byName.codegraph_overview.parameters.required, [])
+})
+
 test('read-only tools report a readable error before an index exists', async () => {
   const tools = await applyOnce({ root: join(PROJ, '..', 'no-such-dir') })
   const overview = tools.find((t) => t.name === 'codegraph_overview')
@@ -95,7 +109,6 @@ test('codegraph_reindex builds an index, then queries work', async () => {
     rmSync(scratch, { recursive: true, force: true })
   }
 })
-
 test('bridge reuses one persistent Python process for a root', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-persistent-'))
   const root = join(scratch, 'proj')
