@@ -113,6 +113,10 @@ class QueryTest(unittest.TestCase):
         got = sorted(r["qualname"] for r in rows)
         self.assertEqual(got, ["pkg.cart.create_cart"])
 
+    def test_impact_zero_depth_returns_no_callers(self):
+        self.assertEqual(
+            query_impact(self.store, "pkg.cart.Cart", depth=0), [])
+
     def test_impact_dedupes_cyclic_callers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

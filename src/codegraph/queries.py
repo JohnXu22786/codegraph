@@ -144,7 +144,7 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
     visited = set()
     seen = set()
     results = []
-    for hop in range(1, max(1, depth) + 1):
+    for hop in range(1, max(0, depth) + 1):
         if not frontier:
             break
         placeholders = ",".join("?" for _ in frontier)
