@@ -119,7 +119,8 @@ def _imported_files(store: IndexStore, file_id: int):
             out.add(imp["target_id"])
         for nm in _names_of(imp):
             base = imp["module"]
-            if base.startswith("."):  # relative: resolve against our package
+            if file["lang"] == "python" and base.startswith("."):
+                # Python relative imports resolve against the dotted package.
                 level = len(base) - len(base.lstrip("."))
                 mod_parts = file["module"].split(".")
                 # a file inside pkg/ has module "pkg.cart" (package "pkg");

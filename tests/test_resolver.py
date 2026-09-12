@@ -75,6 +75,36 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(fid)
         self.assertEqual(self.store.symbol_by_id(fid).qualname, "web/util.fmt")
 
+    def test_non_python_relative_import_does_not_add_root_module(self):
+        """A JS/TS relative path must not be treated as a Python package id."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.ts").write_text(
+                'import { helper } from "./util";\n\n'
+                "export function caller() {\n"
+                "  return target();\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (root / "util.ts").write_text(
+                "export function helper() { return 1; }\n", encoding="utf-8")
+            # The Python-style adjustment incorrectly treats this as the
+            # imported module, making its unrelated target() visible to app.ts.
+            (root / "helper.ts").write_text(
+                "export function target() { return 2; }\n", encoding="utf-8")
+            (root / "other.ts").write_text(
+                "export function target() { return 3; }\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.ts")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "target"))
+            finally:
+                store.close()
+
     def test_go_imported_function(self):
         gid = self._callee("main.go", "helper.Greet")
         self.assertIsNotNone(gid)
