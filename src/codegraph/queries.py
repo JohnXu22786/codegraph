@@ -137,6 +137,8 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
 
     Each symbol appears once, at its shallowest reachable depth.
     """
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
     sym = _find_symbol(store, symbol)
     if sym is None:
         return []

@@ -117,6 +117,10 @@ class QueryTest(unittest.TestCase):
         rows = query_impact(self.store, "pkg.cart.Cart", depth=3, limit=1)
         self.assertEqual([r["qualname"] for r in rows], ["pkg.cart.create_cart"])
 
+    def test_impact_rejects_negative_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            query_impact(self.store, "pkg.cart.Cart", limit=-1)
+
     def test_impact_zero_depth_returns_no_callers(self):
         self.assertEqual(
             query_impact(self.store, "pkg.cart.Cart", depth=0), [])
