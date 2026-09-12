@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -37,17 +38,19 @@ def _included(rel: Path, cfg) -> bool:
     return False
 
 
-def discover_files(root: Path, cfg) -> list:
+def discover_files(root: Path, cfg, onerror=None) -> list:
     """Return the relative POSIX paths of all indexable source files.
 
     Directories are pruned as they are walked, so ignore rules on directory
     names are cheap and correct. Files are filtered by language registry,
-    include/exclude rules and the size cap.
+    include/exclude rules and the size cap. ``onerror`` receives errors that
+    make discovery incomplete, including errors reading file metadata.
     """
     root = Path(root)
     max_bytes = cfg.max_file_kb * 1024
     found = []
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    for dirpath, dirnames, filenames in os.walk(
+            root, followlinks=False, onerror=onerror):
         rel_dir = Path(dirpath).relative_to(root)
         kept = []
         for d in sorted(dirnames):
@@ -65,12 +68,15 @@ def discover_files(root: Path, cfg) -> list:
             if lang_for(rel.as_posix(), cfg.language_map) is None:
                 continue
             full = root / rel
-            if not full.is_file():
-                continue
             try:
-                size = full.stat().st_size
-            except OSError:
+                info = full.stat()
+            except OSError as exc:
+                if onerror is not None:
+                    onerror(exc)
                 continue
+            if not stat.S_ISREG(info.st_mode):
+                continue
+            size = info.st_size
             if max_bytes and size > max_bytes:
                 continue
             found.append(rel)

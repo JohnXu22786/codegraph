@@ -63,10 +63,17 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     store.set_meta("root", str(Path(cfg.root).resolve()))
     scan_config = _scan_config(cfg)
     scan_config_changed = store.get_meta("scan_config") != scan_config
-    scan_config_complete = True
     root = Path(cfg.root)
 
-    discovered = discover_files(root, cfg)
+    discovery_complete = True
+
+    def on_discovery_error(exc):
+        nonlocal discovery_complete
+        discovery_complete = False
+        emit(f"warning: incomplete file discovery: {exc}")
+
+    discovered = discover_files(root, cfg, onerror=on_discovery_error)
+    scan_config_complete = discovery_complete
     known = store.all_file_paths()
     seen = set()
     changed_file_ids = set()
@@ -122,7 +129,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             report.calls += len(scan.calls)
             report.imports += len(scan.imports)
 
-        removed_paths = sorted(known - seen)
+        removed_paths = sorted(known - seen) if discovery_complete else []
         if removed_paths:
             # Persist the retry marker before a removal transaction commits.
             # Otherwise an interruption after removal can leave cleared
@@ -158,8 +165,8 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                     recheck_all_imports=added_file or removed_file,
                 )
             store.set_meta("resolution_pending", "0")
-        # Keep a changed config pending when a discovered file could not be
-        # read or mapped, so the next run retries its stale payload.
+        # Keep a changed config pending when discovery or a discovered file
+        # could not complete, so the next run retries its stale payload.
         if scan_config_complete:
             store.set_meta("scan_config", scan_config)
         store.set_meta("last_indexed", store.now_iso())
