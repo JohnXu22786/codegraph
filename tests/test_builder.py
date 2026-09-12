@@ -164,6 +164,28 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_deleted_empty_file_clears_resolution_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty = root / "empty.py"
+            empty.write_text("# no symbols or references\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            empty.unlink()
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(store.get_meta("resolution_pending"), "0")
+            finally:
+                store.close()
+
+            with patch("codegraph.builder.resolve_all") as resolve:
+                build_index(cfg)
+            resolve.assert_not_called()
+
     def test_force_reparses_all(self):
         build_index(self._cfg())
         report = build_index(self._cfg(), force=True)

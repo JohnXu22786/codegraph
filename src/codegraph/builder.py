@@ -139,7 +139,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
 
         needs_resolution = (
             changed_file_ids or recheck_call_ids or recheck_import_ids or
-            changed_symbol_names or resolution_pending
+            changed_symbol_names or removed_file or resolution_pending
         )
         if needs_resolution:
             # Payload transactions commit before this pass. Persist the retry
