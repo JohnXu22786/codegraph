@@ -97,6 +97,95 @@ class BuilderTest(unittest.TestCase):
         self.assertIsNone(store.file_by_path("helper.go"))
         store.close()
 
+    def test_deleted_file_interruption_keeps_resolution_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = root / "entry.ts"
+            entry.write_text(
+                'import { replacement } from "./util";\n'
+                "export function invoke() {\n"
+                "  return replacement();\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            preferred = root / "util.ts"
+            preferred.write_text(
+                "export const selected = true;\n", encoding="utf-8")
+            (root / "util.js").write_text(
+                "export function replacement() { return 1; }\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            preferred.unlink()
+            original_remove_file = IndexStore.remove_file
+            original_set_meta = IndexStore.set_meta
+            removed = False
+
+            def remove_file(store, path):
+                nonlocal removed
+                impact = original_remove_file(store, path)
+                removed = True
+                return impact
+
+            def set_meta(store, key, value):
+                if removed and key == "resolution_pending" and value == "1":
+                    raise RuntimeError("interrupted after file removal")
+                return original_set_meta(store, key, value)
+
+            with patch.object(IndexStore, "remove_file", remove_file), \
+                    patch.object(IndexStore, "set_meta", set_meta):
+                with self.assertRaises(RuntimeError):
+                    build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(store.get_meta("resolution_pending"), "1")
+                self.assertIsNone(store.find_import(module="./util")["target_id"])
+            finally:
+                store.close()
+
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(
+                    store.find_import(module="./util")["target_id"],
+                    store.file_by_path("util.js")["id"],
+                )
+                call = store.find_call(callee="replacement")
+                self.assertIsNotNone(call["callee_id"])
+                self.assertEqual(
+                    store.file_by_id(call["callee_id"])["path"], "util.js"
+                )
+                self.assertEqual(store.get_meta("resolution_pending"), "0")
+            finally:
+                store.close()
+
+    def test_deleted_empty_file_clears_resolution_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty = root / "empty.py"
+            empty.write_text("# no symbols or references\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            empty.unlink()
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(store.get_meta("resolution_pending"), "0")
+            finally:
+                store.close()
+
+            with patch("codegraph.builder.resolve_all") as resolve:
+                build_index(cfg)
+            resolve.assert_not_called()
+
     def test_force_reparses_all(self):
         build_index(self._cfg())
         report = build_index(self._cfg(), force=True)
