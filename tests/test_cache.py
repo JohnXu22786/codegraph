@@ -28,6 +28,15 @@ class TTLCacheTest(unittest.TestCase):
         self.assertEqual(cache.get("b"), 2)
         self.assertEqual(cache.get("c"), 3)
 
+    def test_hit_refreshes_recency(self):
+        cache = TTLCache(ttl=10.0, max_size=2)
+        cache.put("a", 1)
+        cache.put("b", 2)
+        self.assertEqual(cache.get("a"), 1)  # refreshes a as the newest entry
+        cache.put("c", 3)  # evicts untouched b now
+        self.assertEqual(cache.get("a"), 1)
+        self.assertIsNone(cache.get("b"))
+
     def test_refresh_on_put(self):
         cache = TTLCache(ttl=10.0, max_size=2)
         cache.put("a", 1)
