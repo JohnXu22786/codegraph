@@ -107,14 +107,18 @@ class McpServerTest(unittest.TestCase):
         replies = self._run([self._msg(1, "mystery/method")])
         self.assertEqual(replies[0]["error"]["code"], -32601)
 
-    def test_malformed_json_does_not_kill_server(self):
-        payload = b'{"jsonrpc":"2.0","id":1,"method":"tools/list"}\nnot-json\n'
+    def test_malformed_json_returns_parse_error_and_does_not_kill_server(self):
+        payload = b'not-json\n{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n'
         out = io.BytesIO()
         log = io.BytesIO()
         run_stdio(io.BytesIO(payload), out, log, self.cfg)
         lines = out.getvalue().decode("utf-8").splitlines()
-        self.assertEqual(len(lines), 1)  # only the valid request answered
-        self.assertEqual(json.loads(lines[0])["result"]["tools"][0]["name"], "callers")
+        self.assertEqual(len(lines), 2)
+        parse_error = json.loads(lines[0])
+        self.assertIsNone(parse_error["id"])
+        self.assertEqual(parse_error["error"]["code"], -32700)
+        self.assertEqual(parse_error["error"]["message"], "Parse error")
+        self.assertEqual(json.loads(lines[1])["result"]["tools"][0]["name"], "callers")
 
     def test_ping(self):
         replies = self._run([self._msg(1, "ping")])
