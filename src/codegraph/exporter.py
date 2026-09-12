@@ -51,6 +51,9 @@ def export_dot(store: IndexStore) -> str:
     for r in store.conn.execute("SELECT id, path FROM files"):
         file_labels[r["id"]] = r["path"]
 
+    for fid, path in file_labels.items():
+        lines.append(f'  f{fid} [label="{_esc(path)}"];')
+
     # nodes grouped per file for visual clustering
     by_file = {}
     for sid, (fid, qualname, kind) in symbol_files.items():

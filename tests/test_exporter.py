@@ -42,6 +42,24 @@ class ExportTest(unittest.TestCase):
         statements = [s for s in dot.splitlines() if s.strip().endswith(";")]
         self.assertGreater(len(statements), 10)
 
+    def test_dot_import_file_nodes_are_declared_and_labeled(self):
+        dot = export_dot(self.store)
+        file_paths = {
+            row["id"]: row["path"]
+            for row in self.store.conn.execute("SELECT id, path FROM files")
+        }
+        imports = self.store.conn.execute(
+            "SELECT file_id, target_id FROM imports WHERE target_id IS NOT NULL"
+        ).fetchall()
+        self.assertGreater(len(imports), 0)
+
+        for row in imports:
+            for file_id in (row["file_id"], row["target_id"]):
+                self.assertIn(
+                    f'  f{file_id} [label="{file_paths[file_id]}"];',
+                    dot,
+                )
+
     def test_json_structure(self):
         data = export_json(self.store)
         self.assertEqual(
