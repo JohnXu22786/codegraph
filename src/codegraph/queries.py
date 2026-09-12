@@ -91,6 +91,8 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
     (``from pkg import pricing`` targets pkg/__init__.py but depends on
     pkg/pricing.py too).
     """
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
     file = _resolve_module_arg(store, module)
     if file is None:
         return []

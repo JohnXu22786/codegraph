@@ -97,6 +97,10 @@ class QueryTest(unittest.TestCase):
         rows = query_dependents(self.store, "pkg.pricing", limit=0)
         self.assertEqual(rows, [])
 
+    def test_dependents_rejects_negative_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            query_dependents(self.store, "pkg.pricing", limit=-1)
+
     def test_impact_transitive_callers(self):
         rows = query_impact(self.store, "pkg.cart.Cart", depth=3)
         got = sorted((r["depth"], r["qualname"]) for r in rows)
