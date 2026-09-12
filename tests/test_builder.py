@@ -2,6 +2,7 @@
 
 import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -247,6 +248,270 @@ class BuilderTest(unittest.TestCase):
         report = build_index(self._cfg(), force=True)
         self.assertEqual(report.files_changed, ALL_FILES)
         self.assertEqual(report.files_skipped, 0)
+
+    def test_force_stale_build_restores_existing_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.py"
+            target.write_text(
+                "def original():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                last_indexed = store.get_meta("last_indexed")
+            finally:
+                store.close()
+
+            target.write_text(
+                "def stale():\n    return 2\n", encoding="utf-8")
+            scanned = threading.Event()
+            allow_commit = threading.Event()
+            errors = []
+            from codegraph.scanner import scan_text as real_scan_text
+
+            def controlled_scan(text, lang, rel_path, engine):
+                scanned.set()
+                self.assertTrue(allow_commit.wait(5))
+                return real_scan_text(text, lang, rel_path, engine)
+
+            def run_build():
+                try:
+                    build_index(cfg, force=True, quiet=True)
+                except Exception as exc:  # report failures in the test thread
+                    errors.append(exc)
+
+            with patch("codegraph.builder.scan_text", side_effect=controlled_scan):
+                thread = threading.Thread(target=run_build)
+                thread.start()
+                self.assertTrue(scanned.wait(5))
+                target.write_text(
+                    "def fresh():\n    return 3\n", encoding="utf-8")
+                allow_commit.set()
+                thread.join(5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertIn("source changed during index build", str(errors[0]))
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.symbol_by_qualname("target.original"))
+                self.assertIsNone(store.symbol_by_qualname("target.stale"))
+                self.assertIsNone(store.symbol_by_qualname("target.fresh"))
+                self.assertEqual(store.get_meta("last_indexed"), last_indexed)
+            finally:
+                store.close()
+
+    def test_concurrent_builds_do_not_publish_stale_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.py"
+            target.write_text(
+                "def original():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            target.write_text(
+                "def stale():\n    return 2\n", encoding="utf-8")
+            stale_scanned = threading.Event()
+            allow_stale = threading.Event()
+            fresh_scanned = threading.Event()
+            allow_fresh = threading.Event()
+            errors = []
+            from codegraph.scanner import scan_text as real_scan_text
+
+            def controlled_scan(text, lang, rel_path, engine):
+                if "return 2" in text:
+                    stale_scanned.set()
+                    self.assertTrue(allow_stale.wait(5))
+                elif "return 3" in text:
+                    fresh_scanned.set()
+                    self.assertTrue(allow_fresh.wait(5))
+                return real_scan_text(text, lang, rel_path, engine)
+
+            def run_stale():
+                try:
+                    build_index(cfg, quiet=True)
+                except Exception as exc:  # report failures in the test thread
+                    errors.append(exc)
+
+            def run_fresh():
+                try:
+                    build_index(cfg, quiet=True)
+                except Exception as exc:
+                    errors.append(exc)
+
+            with patch("codegraph.builder.scan_text", side_effect=controlled_scan):
+                stale_thread = threading.Thread(target=run_stale)
+                stale_thread.start()
+                self.assertTrue(stale_scanned.wait(5))
+
+                target.write_text(
+                    "def fresh():\n    return 3\n", encoding="utf-8")
+                fresh_thread = threading.Thread(target=run_fresh)
+                fresh_thread.start()
+
+                try:
+                    self.assertFalse(
+                        fresh_scanned.wait(1),
+                        "same-root builds were not serialized",
+                    )
+                finally:
+                    allow_stale.set()
+                    allow_fresh.set()
+                    stale_thread.join(5)
+                    fresh_thread.join(5)
+
+            self.assertFalse(stale_thread.is_alive())
+            self.assertFalse(fresh_thread.is_alive())
+            self.assertLessEqual(len(errors), 1)
+            self.assertTrue(all(isinstance(error, RuntimeError) for error in errors))
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.symbol_by_qualname("target.fresh"))
+                self.assertIsNone(store.symbol_by_qualname("target.stale"))
+            finally:
+                store.close()
+
+    def test_build_rejects_source_changed_before_payload_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.py"
+            target.write_text(
+                "def original():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            target.write_text(
+                "def stale():\n    return 2\n", encoding="utf-8")
+            scanned = threading.Event()
+            allow_commit = threading.Event()
+            errors = []
+            from codegraph.scanner import scan_text as real_scan_text
+
+            def controlled_scan(text, lang, rel_path, engine):
+                scanned.set()
+                self.assertTrue(allow_commit.wait(5))
+                return real_scan_text(text, lang, rel_path, engine)
+
+            def run_build():
+                try:
+                    build_index(cfg, quiet=True)
+                except Exception as exc:
+                    errors.append(exc)
+
+            with patch("codegraph.builder.scan_text", side_effect=controlled_scan):
+                thread = threading.Thread(target=run_build)
+                thread.start()
+                self.assertTrue(scanned.wait(5))
+                target.write_text(
+                    "def fresh():\n    return 3\n", encoding="utf-8")
+                allow_commit.set()
+                thread.join(5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertIn("source changed during index build", str(errors[0]))
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNone(store.symbol_by_qualname("target.stale"))
+                self.assertIsNotNone(store.symbol_by_qualname("target.original"))
+            finally:
+                store.close()
+
+    def test_stale_project_check_restores_earlier_payload_transactions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "a_target.py"
+            later = root / "z_later.py"
+            first.write_text(
+                "def original():\n    return 1\n", encoding="utf-8")
+            later.write_text(
+                "def later_original():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            first.write_text(
+                "def stale():\n    return 2\n", encoding="utf-8")
+            later.write_text(
+                "def later_stale():\n    return 2\n", encoding="utf-8")
+            later_scanned = threading.Event()
+            allow_later = threading.Event()
+            errors = []
+            from codegraph.scanner import scan_text as real_scan_text
+
+            def controlled_scan(text, lang, rel_path, engine):
+                if rel_path == "z_later.py":
+                    later_scanned.set()
+                    self.assertTrue(allow_later.wait(5))
+                return real_scan_text(text, lang, rel_path, engine)
+
+            def run_build():
+                try:
+                    build_index(cfg, quiet=True)
+                except Exception as exc:
+                    errors.append(exc)
+
+            with patch("codegraph.builder.scan_text", side_effect=controlled_scan):
+                thread = threading.Thread(target=run_build)
+                thread.start()
+                self.assertTrue(later_scanned.wait(5))
+                first.write_text(
+                    "def fresh():\n    return 3\n", encoding="utf-8")
+                allow_later.set()
+                thread.join(5)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RuntimeError)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.symbol_by_qualname("a_target.original"))
+                self.assertIsNone(store.symbol_by_qualname("a_target.stale"))
+                self.assertIsNotNone(
+                    store.symbol_by_qualname("z_later.later_original")
+                )
+                self.assertIsNone(
+                    store.symbol_by_qualname("z_later.later_stale")
+                )
+                self.assertEqual(store.get_meta("resolution_pending"), "0")
+            finally:
+                store.close()
+
+    def test_external_db_does_not_require_writable_source_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "source"
+            db_parent = base / "index"
+            root.mkdir()
+            (root / "module.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            cfg.db_path = str(db_parent / "cg.sqlite")
+            original_mkdir = Path.mkdir
+
+            def deny_source_lock(path, *args, **kwargs):
+                if path == root / ".cg":
+                    raise PermissionError("source root is read-only")
+                return original_mkdir(path, *args, **kwargs)
+
+            with patch.object(Path, "mkdir", deny_source_lock):
+                report = build_index(cfg, quiet=True)
+
+            self.assertEqual(report.files_changed, 1)
+            self.assertTrue(Path(cfg.db_path).exists())
+            self.assertFalse((root / ".cg").exists())
 
     def test_language_map_change_replaces_unchanged_file_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
