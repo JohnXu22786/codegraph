@@ -1570,6 +1570,8 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
     if lang == "python":
         if module_text.startswith("."):
             level = len(module_text) - len(module_text.lstrip("."))
+            if level > len(file_dir.parts):
+                return None
             rel_name = module_text.lstrip(".")
             base = file_dir
             for _ in range(level - 1):
