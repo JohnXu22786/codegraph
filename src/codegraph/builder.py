@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import threading
 import time
 from contextlib import contextmanager
@@ -29,6 +30,10 @@ except ImportError:  # pragma: no cover - non-Windows uses fcntl above
 
 _ROOT_LOCKS = {}
 _ROOT_LOCKS_GUARD = threading.Lock()
+
+
+class _StaleBuildError(RuntimeError):
+    """Raised when source contents changed before a build could commit."""
 
 
 @dataclass
@@ -78,11 +83,11 @@ def _assert_file_fresh(root: Path, path: str, digest: str):
     try:
         current = _digest((root / path).read_bytes())
     except OSError as exc:
-        raise RuntimeError(
+        raise _StaleBuildError(
             f"source changed during index build ({path}); retry"
         ) from exc
     if current != digest:
-        raise RuntimeError(
+        raise _StaleBuildError(
             f"source changed during index build ({path}); retry"
         )
 
@@ -93,14 +98,14 @@ def _assert_project_fresh(root: Path, cfg: ProjectConfig, expected: dict,
     discovered = discover_files(root, cfg)
     current_paths = {rel.as_posix() for rel in discovered}
     if current_paths != expected_paths:
-        raise RuntimeError("project sources changed during index build; retry")
+        raise _StaleBuildError("project sources changed during index build; retry")
     current = _source_snapshot(root, cfg, discovered)
     if any(current.get(path) != digest for path, digest in expected.items()):
-        raise RuntimeError("project sources changed during index build; retry")
+        raise _StaleBuildError("project sources changed during index build; retry")
 
 
 @contextmanager
-def _root_build_lock(root: Path):
+def _root_build_lock(root: Path, db_path: str):
     """Serialize builds for one project across threads and processes."""
     root = Path(root).resolve()
     key = str(root)
@@ -108,7 +113,9 @@ def _root_build_lock(root: Path):
         thread_lock = _ROOT_LOCKS.setdefault(key, threading.Lock())
 
     with thread_lock:
-        lock_path = root / ".cg" / "build.lock"
+        lock_parent = Path(db_path).resolve().parent
+        lock_name = f".codegraph-build-{_digest(str(root).encode())[:16]}.lock"
+        lock_path = lock_parent / lock_name
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+b") as lock_file:
             if fcntl is not None:
@@ -147,7 +154,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     during a build raises ``RuntimeError`` before the stale payload is
     committed.
     """
-    with _root_build_lock(Path(cfg.root)):
+    with _root_build_lock(Path(cfg.root), cfg.db_path):
         return _build_index(cfg, force=force, quiet=quiet, log=log)
 
 
@@ -164,6 +171,8 @@ def _build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     db.parent.mkdir(parents=True, exist_ok=True)
 
     store = IndexStore(str(db))
+    prebuild_db = sqlite3.connect(":memory:")
+    store.conn.backup(prebuild_db)
     store.set_meta("root", str(Path(cfg.root).resolve()))
     scan_config = _scan_config(cfg)
     scan_config_changed = store.get_meta("scan_config") != scan_config
@@ -289,8 +298,16 @@ def _build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         for row in store.conn.execute(
                 "SELECT lang, COUNT(*) AS n FROM files GROUP BY lang ORDER BY lang"):
             report.languages[row["lang"]] = row["n"]
+    except _StaleBuildError:
+        # Earlier payload transactions are intentionally committed so a
+        # failed scan can be retried. A freshness failure is different: the
+        # whole build saw a mixed source snapshot, so restore its starting DB.
+        store.conn.rollback()
+        prebuild_db.backup(store.conn)
+        raise
     finally:
         store.close()
+        prebuild_db.close()
 
     report.files_scanned = len(discovered)
     report.elapsed = time.monotonic() - started
