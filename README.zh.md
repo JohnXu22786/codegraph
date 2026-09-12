@@ -206,7 +206,7 @@ codegraph export json -o graph.json   # 结构化数据：files/symbols/calls/im
 │   └── server/               # stdio 工具服务器
 │       ├── handlers.py       #   工具定义/执行/渲染
 │       └── mcp.py            #   JSON-RPC 协议层
-└── tests/                    # 129 个单元/集成测试（另有 node:test 桥接用例）
+└── tests/                    # 130 个单元/集成测试（另有 node:test 桥接用例）
 ```
 
 ## 测试
