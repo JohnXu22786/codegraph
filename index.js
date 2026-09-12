@@ -340,7 +340,7 @@ function getSession(config, root) {
     session = new RootSession(config, root)
     SESSIONS.set(key, session)
   }
-  return { key, session }
+  return session
 }
 
 function requestController(signal, timeoutMs) {
@@ -457,15 +457,13 @@ async function executeCodegraph(config, args, execContext, request) {
   const root = resolveRoot(config, args)
   const timeoutMs = requestTimeout(config, args)
   const controls = requestController(execContext?.signal, timeoutMs)
-  const { key, session } = getSession(config, root)
+  const session = getSession(config, root)
   try {
     return await session.enqueue(async () => {
       try {
         return await session.server.request(request.name, request.arguments, controls.signal)
       } catch (error) {
         if (!error?.fallback) throw error
-        session.close()
-        if (SESSIONS.get(key) === session) SESSIONS.delete(key)
         return runCodegraph(config, request.argv, {
           signal: controls.signal,
           timeoutMs,

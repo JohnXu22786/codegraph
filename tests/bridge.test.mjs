@@ -33,6 +33,68 @@ function makePythonWrapper(dir, logPath, body = 'exec python3 "$@"') {
   return wrapper
 }
 
+function makeFallbackRecoveryWrapper(dir, logPath, failPath, releasePath, donePath) {
+  const wrapper = join(dir, 'python-fallback-wrapper.sh')
+  const countPath = join(dir, 'persistent-count')
+  writeFileSync(
+    wrapper,
+    `#!/bin/sh
+log=${shellQuote(logPath)}
+count_file=${shellQuote(countPath)}
+fail_file=${shellQuote(failPath)}
+release_file=${shellQuote(releasePath)}
+done_file=${shellQuote(donePath)}
+
+record() {
+  printf '%s\\n' "$1" >> "$log"
+}
+
+if [ "\${3:-}" = "serve" ]; then
+  count=0
+  if [ -f "$count_file" ]; then count=$(tr -d '\\n' < "$count_file"); fi
+  count=$((count + 1))
+  printf '%s\\n' "$count" > "$count_file"
+  record "persistent-start-$count"
+  if [ "$count" -eq 1 ]; then
+    while [ ! -f "$fail_file" ]; do sleep 0.01; done
+    record "persistent-fail-1"
+    exit 1
+  fi
+  while [ ! -f "$done_file" ]; do sleep 0.01; done
+  record "persistent-ready-$count"
+  exec python3 "$@"
+fi
+
+command="\${3:-unknown}"
+record "fallback-start-$command"
+while [ ! -f "$release_file" ]; do sleep 0.01; done
+record "fallback-run-$command"
+python3 "$@"
+status=$?
+touch "$done_file"
+record "fallback-done-$command"
+exit "$status"
+`,
+    'utf8',
+  )
+  chmodSync(wrapper, 0o755)
+  return wrapper
+}
+
+function eventsFrom(logPath) {
+  if (!existsSync(logPath)) return []
+  return readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean)
+}
+
+async function waitForEvent(logPath, event) {
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    if (eventsFrom(logPath).includes(event)) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.fail(`timed out waiting for ${event}; events: ${eventsFrom(logPath).join(', ')}`)
+}
+
 async function closePlugin() {
   if (typeof plugin.close === 'function') await plugin.close()
 }
@@ -190,6 +252,60 @@ test('a queued bridge timeout is not blocked by an earlier request', async () =>
     await closePlugin()
     await Promise.all([first, second])
   } finally {
+    await closePlugin()
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
+test('fallback keeps queued and new requests serialized for a root', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-fallback-recovery-'))
+  const root = join(scratch, 'proj')
+  const logPath = join(scratch, 'events.log')
+  const failPath = join(scratch, 'fail-persistent')
+  const releasePath = join(scratch, 'release-fallback')
+  const donePath = join(scratch, 'fallback-done')
+  cpSync(PROJ, root, { recursive: true })
+  const python = makeFallbackRecoveryWrapper(scratch, logPath, failPath, releasePath, donePath)
+  const pending = []
+  try {
+    const tools = await applyOnce({ root, python })
+    const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
+
+    const first = byName.codegraph_reindex.execute({})
+    pending.push(first)
+    await waitForEvent(logPath, 'persistent-start-1')
+    const queued = byName.codegraph_overview.execute({})
+    pending.push(queued)
+    writeFileSync(failPath, '')
+    await waitForEvent(logPath, 'fallback-start-index')
+
+    const newRequest = byName.codegraph_overview.execute({})
+    pending.push(newRequest)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(eventsFrom(logPath), [
+      'persistent-start-1',
+      'persistent-fail-1',
+      'fallback-start-index',
+    ])
+
+    writeFileSync(releasePath, '')
+    const [firstResult, queuedResult, newResult] = await Promise.all([first, queued, newRequest])
+    assert.equal(firstResult.ok, true)
+    assert.equal(queuedResult.ok, true)
+    assert.equal(newResult.ok, true)
+    assert.deepEqual(eventsFrom(logPath), [
+      'persistent-start-1',
+      'persistent-fail-1',
+      'fallback-start-index',
+      'fallback-run-index',
+      'fallback-done-index',
+      'persistent-start-2',
+      'persistent-ready-2',
+    ])
+  } finally {
+    writeFileSync(failPath, '')
+    writeFileSync(releasePath, '')
+    await Promise.allSettled(pending)
     await closePlugin()
     rmSync(scratch, { recursive: true, force: true })
   }
