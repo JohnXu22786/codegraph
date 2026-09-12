@@ -327,6 +327,8 @@ class IndexStore:
     def search(self, text: str, limit: int = 20):
         """FTS5 lookup over symbols; falls back to LIKE when the query is
         not valid FTS5 syntax (e.g. stray quotes from the model)."""
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
         text = text.strip()
         if not text:
             return []

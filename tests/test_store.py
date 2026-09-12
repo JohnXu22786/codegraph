@@ -78,6 +78,10 @@ class StoreTest(unittest.TestCase):
         self.store.remove_file("a.py")
         self.assertEqual(self.store.search("hello"), [])
 
+    def test_search_rejects_negative_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            self.store.search("hello", limit=-1)
+
     def test_incremental_helpers(self):
         self.store.upsert_file("a.py", "python", 10, "d1", 3)
         self.store.upsert_file("b.py", "python", 5, "d2", 1)
