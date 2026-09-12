@@ -125,6 +125,35 @@ class BuilderTest(unittest.TestCase):
         finally:
             store.close()
 
+    def test_new_higher_priority_import_candidate_re_resolves_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "entry.ts").write_text(
+                'import { value } from "./util";\n', encoding="utf-8")
+            (root / "util.js").write_text(
+                "export const value = 'js';\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                imp = store.find_import(module="./util")
+                self.assertEqual(imp["target_id"], store.file_by_path("util.js")["id"])
+            finally:
+                store.close()
+
+            (root / "util.ts").write_text(
+                "export const value = 'ts';\n", encoding="utf-8")
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                imp = store.find_import(module="./util")
+                self.assertEqual(imp["target_id"], store.file_by_path("util.ts")["id"])
+            finally:
+                store.close()
+
     def test_new_duplicate_symbol_invalidates_resolved_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

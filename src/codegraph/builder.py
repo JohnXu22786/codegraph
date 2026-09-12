@@ -116,7 +116,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                 call_ids=recheck_call_ids,
                 import_ids=recheck_import_ids,
                 symbol_names=changed_symbol_names,
-                resolve_unresolved_imports=added_file,
+                recheck_all_imports=added_file,
             )
         store.set_meta("last_indexed", store.now_iso())
         store.conn.commit()

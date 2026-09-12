@@ -250,7 +250,7 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
-                symbol_names=(), resolve_unresolved_imports=False):
+                symbol_names=(), recheck_all_imports=False):
     """Post-pass: fill target_id, then caller_id / callee_id for selected edges.
 
     Imports are resolved before calls so that first-build resolution can
@@ -284,10 +284,12 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                         tuple(file_ids),
                     )
                 )
-            if resolve_unresolved_imports:
+            if recheck_all_imports:
+                # A new file can be a higher-priority candidate for an import
+                # that already has a target, so retry resolved imports too.
                 import_ids.update(
                     row["id"] for row in store.conn.execute(
-                        "SELECT id FROM imports WHERE target_id IS NULL"
+                        "SELECT id FROM imports"
                     )
                 )
             if symbol_names:
