@@ -160,6 +160,53 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_scan_failure_after_payload_commit_is_retried_on_next_incremental_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a_target.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            (root / "m_caller.py").write_text(
+                "def invoke():\n    return target()\n", encoding="utf-8")
+            (root / "z_later.py").write_text(
+                "value = 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            (root / "a_target.py").write_text(
+                "def target():\n    return 2\n", encoding="utf-8")
+            (root / "z_later.py").write_text(
+                "value = 2\n", encoding="utf-8")
+            from codegraph.scanner import scan_text as real_scan_text
+
+            def fail_later(text, lang, rel_path, engine):
+                if rel_path == "z_later.py":
+                    raise RuntimeError("temporary scan failure")
+                return real_scan_text(text, lang, rel_path, engine)
+
+            with patch("codegraph.builder.scan_text", side_effect=fail_later):
+                with self.assertRaises(RuntimeError):
+                    build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(store.get_meta("resolution_pending"), "1")
+                self.assertIsNone(store.find_call(callee="target")["callee_id"])
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 1)
+            self.assertEqual(report.files_skipped, 2)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="target")
+                self.assertIsNotNone(call["callee_id"])
+                self.assertEqual(store.get_meta("resolution_pending"), "0")
+            finally:
+                store.close()
+
     def test_new_higher_priority_import_candidate_re_resolves_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
