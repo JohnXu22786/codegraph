@@ -125,6 +125,41 @@ class BuilderTest(unittest.TestCase):
         finally:
             store.close()
 
+    def test_failed_resolution_is_retried_on_next_incremental_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            caller = root / "caller.py"
+            caller.write_text(
+                "def invoke():\n    return missing()\n", encoding="utf-8")
+            (root / "target.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            caller.write_text(
+                "def invoke():\n    return target()\n", encoding="utf-8")
+            with patch(
+                    "codegraph.builder.resolve_all",
+                    side_effect=RuntimeError("temporary resolution failure")):
+                with self.assertRaises(RuntimeError):
+                    build_index(cfg)
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 0)
+            self.assertEqual(report.files_skipped, 2)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="target")
+                self.assertIsNotNone(call["callee_id"])
+                self.assertEqual(store.get_meta("resolution_pending"), "0")
+                self.assertEqual(
+                    store.symbol_by_id(call["callee_id"]).qualname, "target.target"
+                )
+            finally:
+                store.close()
+
     def test_new_higher_priority_import_candidate_re_resolves_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
