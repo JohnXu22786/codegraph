@@ -100,6 +100,10 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str):
             return rows[0]["id"]
 
     # 4. globally unique name (last resort heuristic)
+    if file["lang"] == "python":
+        head = callee_text.replace("::", ".").split(".", 1)[0]
+        if _has_unresolved_python_import_binding(store, file_id, head):
+            return None
     rows = store.conn.execute(
         "SELECT id FROM symbols WHERE name = ? LIMIT 2", (name,)
     ).fetchall()
@@ -113,6 +117,7 @@ def _imported_files(store: IndexStore, file_id: int):
     file = store.file_by_id(file_id)
     if file is None:
         return set()
+    root_is_package = store.file_by_path("__init__.py") is not None
     out = set()
     for imp in store.imports_for_file(file_id):
         if imp["target_id"]:
@@ -129,6 +134,11 @@ def _imported_files(store: IndexStore, file_id: int):
                     base_parts = mod_parts
                 else:
                     base_parts = mod_parts[:-1]
+                package_depth = len(Path(file["path"]).parent.parts)
+                if root_is_package:
+                    package_depth += 1
+                if level > package_depth:
+                    continue
                 for _ in range(level - 1):
                     if base_parts:
                         base_parts = base_parts[:-1]
@@ -151,6 +161,20 @@ def _names_of(imp) -> list:
         return json.loads(imp["names"] or "[]")
     except (ValueError, TypeError):
         return []
+
+
+def _has_unresolved_python_import_binding(store, file_id, name: str) -> bool:
+    """Whether an unresolved ``from`` import may provide ``name``."""
+    for imp in store.imports_for_file(file_id):
+        if imp["kind"] != "from" or imp["target_id"] is not None:
+            continue
+        for imported in _names_of(imp):
+            if imported == "*":
+                return True
+            bound = re.split(r"\s+as\s+", imported, maxsplit=1)[-1].strip()
+            if bound == name:
+                return True
+    return False
 
 
 def resolve_module(store: IndexStore, file_id: int, module_text: str):
@@ -195,13 +219,21 @@ def resolve_module(store: IndexStore, file_id: int, module_text: str):
     if lang == "python":
         if module_text.startswith("."):
             level = len(module_text) - len(module_text.lstrip("."))
+            package_depth = len(file_dir.parts)
+            if store.file_by_path("__init__.py") is not None:
+                package_depth += 1
+            if level > package_depth:
+                return None
             rel_name = module_text.lstrip(".")
             base = file_dir
             for _ in range(level - 1):
                 base = base.parent
             parts = rel_name.split(".") if rel_name else []
-            cands = [base.joinpath(*parts).with_suffix(".py")]
-            cands.append(base.joinpath(*parts) / "__init__.py")
+            if not parts and not base.parts:
+                cands = [base / "__init__.py"]
+            else:
+                cands = [base.joinpath(*parts).with_suffix(".py")]
+                cands.append(base.joinpath(*parts) / "__init__.py")
         else:
             parts = module_text.split(".")
             cands = []
