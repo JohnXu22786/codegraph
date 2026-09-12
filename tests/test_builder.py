@@ -152,6 +152,43 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_config_change_retries_file_after_transient_read_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.py"
+            other = root / "other.py"
+            target.write_text("def target():\n    return 1\n", encoding="utf-8")
+            other.write_text("def other():\n    return 2\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            cfg.language_map = {".py": "javascript"}
+            original_read_bytes = Path.read_bytes
+            failed = False
+
+            def fail_target_once(path):
+                nonlocal failed
+                if path == target and not failed:
+                    failed = True
+                    raise OSError("temporary read failure")
+                return original_read_bytes(path)
+
+            with patch.object(Path, "read_bytes", fail_target_once):
+                first = build_index(cfg, quiet=True)
+
+            self.assertTrue(failed)
+            self.assertEqual(first.files_changed, 1)
+            report = build_index(cfg, quiet=True)
+            self.assertEqual(report.files_changed, 2)
+            self.assertEqual(report.files_skipped, 0)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(store.file_by_path("target.py")["lang"], "javascript")
+            finally:
+                store.close()
+
     def test_last_indexed_meta_written(self):
         build_index(self._cfg())
         store = IndexStore(str(self._cfg().db_path))

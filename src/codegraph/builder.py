@@ -63,6 +63,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     store.set_meta("root", str(Path(cfg.root).resolve()))
     scan_config = _scan_config(cfg)
     scan_config_changed = store.get_meta("scan_config") != scan_config
+    scan_config_complete = True
     root = Path(cfg.root)
 
     discovered = discover_files(root, cfg)
@@ -82,6 +83,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             try:
                 data = (root / rel).read_bytes()
             except OSError as exc:  # file vanished or is unreadable mid-walk
+                scan_config_complete = False
                 emit(f"warning: skipping {posix}: {exc}")
                 continue
             digest = _digest(data)
@@ -94,6 +96,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
 
             lang = languages.lang_for(posix, cfg.language_map)
             if lang is None:  # race with discovery config changes
+                scan_config_complete = False
                 continue
             text = data.decode("utf-8-sig", errors="replace")
             # Mark before scanning so a later scan failure preserves a retry
@@ -147,7 +150,10 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                     recheck_all_imports=added_file,
                 )
             store.set_meta("resolution_pending", "0")
-        store.set_meta("scan_config", scan_config)
+        # Keep a changed config pending when a discovered file could not be
+        # read or mapped, so the next run retries its stale payload.
+        if scan_config_complete:
+            store.set_meta("scan_config", scan_config)
         store.set_meta("last_indexed", store.now_iso())
         store.conn.commit()
 
