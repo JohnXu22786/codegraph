@@ -101,7 +101,8 @@ def run_stdio(input_stream, output_stream, log_stream, cfg):
         try:
             msg = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
-            _log(log_stream, f"dropping invalid JSON-RPC message: {exc}")
+            _log(log_stream, f"invalid JSON-RPC message: {exc}")
+            _send(output_stream, _error(None, -32700, "Parse error"))
             continue
         if not isinstance(msg, dict) or "id" not in msg:
             continue  # notification (e.g. notifications/initialized)
