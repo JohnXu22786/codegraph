@@ -171,6 +171,32 @@ class QueryTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_relative_import_does_not_match_package_prefix(self):
+        """A sibling package with a shared prefix is not a dependent."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text(
+                "from . import pricing\n", encoding="utf-8")
+            (pkg / "pricing.py").write_text(
+                "def price(item):\n    return item\n", encoding="utf-8")
+            pkg2 = root / "pkg2"
+            pkg2.mkdir()
+            (pkg2 / "__init__.py").write_text("", encoding="utf-8")
+            (pkg2 / "consumer.py").write_text(
+                "from . import pricing\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "pkg.pricing")
+                self.assertEqual(
+                    [r["path"] for r in rows], ["pkg/__init__.py"])
+            finally:
+                store.close()
+
     def test_stats(self):
         stats = query_stats(self.store)
         self.assertEqual(stats["files"], 14)

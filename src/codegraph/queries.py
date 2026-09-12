@@ -116,11 +116,10 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
             "WHERE instr(i.names, ?) > 0 AND ("
             "  i.module = ? "
             "  OR (i.module GLOB '.*' AND (impf.module = ? OR ("
-            "    substr(impf.module, 1, length(?)) = ? "
-            "    AND length(impf.module) > length(?)"
+            "    substr(impf.module, 1, length(?) + 1) = ? || '.'"
             "  )))"
             ") ORDER BY f.path, i.line LIMIT ?",
-            (f'"{name}"', base, base, base, base, base, limit),
+            (f'"{name}"', base, base, base, base, limit),
         )
         for r in extra:
             if r["path"] not in seen:
