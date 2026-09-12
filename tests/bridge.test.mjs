@@ -147,11 +147,15 @@ test('registered tools expose object parameter schemas', async () => {
 })
 
 test('read-only tools report a readable error before an index exists', async () => {
-  const tools = await applyOnce({ root: join(PROJ, '..', 'no-such-dir') })
-  const overview = tools.find((t) => t.name === 'codegraph_overview')
-  const res = await overview.execute({})
-  assert.equal(res.ok, false)
-  assert.match(res.error, /no index|index/)
+  try {
+    const tools = await applyOnce({ root: join(PROJ, '..', 'no-such-dir') })
+    const overview = tools.find((t) => t.name === 'codegraph_overview')
+    const res = await overview.execute({})
+    assert.equal(res.ok, false)
+    assert.match(res.error, /no index|index/)
+  } finally {
+    await closePlugin()
+  }
 })
 
 test('codegraph_reindex builds an index, then queries work', async () => {
