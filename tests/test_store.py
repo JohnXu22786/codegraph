@@ -86,7 +86,9 @@ class StoreTest(unittest.TestCase):
 
     def test_clear_references_handles_many_symbol_ids(self):
         fid = self.store.upsert_file("large.py", "python", 10, "d", 1)
-        symbol_count = 1000
+        # Exceed half of SQLite's standard 32,766-variable limit even when
+        # sqlite3.Connection.setlimit is unavailable (Python 3.10).
+        symbol_count = 20_000
         previous_limit = None
         if (hasattr(self.store.conn, "setlimit") and
                 hasattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER")):
