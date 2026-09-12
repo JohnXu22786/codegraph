@@ -294,6 +294,7 @@ def _imported_files(store: IndexStore, file_id: int):
     file = store.file_by_id(file_id)
     if file is None:
         return set()
+    root_is_package = store.file_by_path("__init__.py") is not None
     out = set()
     expanded_go_dirs = set()
     expanded_java_packages = set()
@@ -350,7 +351,10 @@ def _imported_files(store: IndexStore, file_id: int):
                     base_parts = mod_parts
                 else:
                     base_parts = mod_parts[:-1]
-                if level > len(base_parts):
+                package_depth = len(base_parts)
+                if root_is_package and file["path"] != "__init__.py":
+                    package_depth += 1
+                if level > package_depth:
                     continue
                 for _ in range(level - 1):
                     if base_parts:
@@ -1572,8 +1576,10 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
     if lang == "python":
         if module_text.startswith("."):
             level = len(module_text) - len(module_text.lstrip("."))
-            if level > len(file_dir.parts):
-                return None
+            root_is_package = store.file_by_path("__init__.py") is not None
+            package_depth = len(file_dir.parts) + int(root_is_package)
+            if level > package_depth:
+                return []
             rel_name = module_text.lstrip(".")
             base = file_dir
             for _ in range(level - 1):
