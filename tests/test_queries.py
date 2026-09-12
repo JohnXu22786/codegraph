@@ -82,6 +82,25 @@ class QueryTest(unittest.TestCase):
         got = sorted((r["module"], r["target_path"]) for r in rows)
         self.assertEqual(got, [("./logger", "web/logger.ts"), ("./util", "web/util.ts")])
 
+    def test_deps_of_go_package_aggregates_files(self):
+        """Package queries include imports from every file in the package."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "first.go").write_text(
+                'package p\n\nimport "fmt"\n', encoding="utf-8")
+            (root / "second.go").write_text(
+                'package p\n\nimport "os"\n', encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_deps(store, "p")
+                self.assertEqual(
+                    {row["module"] for row in rows}, {"fmt", "os"})
+            finally:
+                store.close()
+
     def test_dependents(self):
         rows = query_dependents(self.store, "pkg.pricing")
         got = sorted(r["path"] for r in rows)
