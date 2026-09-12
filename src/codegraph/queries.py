@@ -153,7 +153,7 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
         if remaining <= 0:
             break
         placeholders = ",".join("?" for _ in frontier)
-        sql = (f"SELECT s.id, s.qualname, s.kind, f.path "
+        sql = (f"SELECT DISTINCT s.id, s.qualname, s.kind, f.path "
                f"FROM calls c JOIN symbols s ON s.id = c.caller_id "
                f"JOIN files f ON f.id = c.file_id "
                f"WHERE c.callee_id IN ({placeholders})")

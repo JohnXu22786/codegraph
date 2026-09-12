@@ -117,6 +117,30 @@ class QueryTest(unittest.TestCase):
         rows = query_impact(self.store, "pkg.cart.Cart", depth=3, limit=1)
         self.assertEqual([r["qualname"] for r in rows], ["pkg.cart.create_cart"])
 
+    def test_impact_limit_counts_distinct_callers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "x.py").write_text(
+                "def target():\n"
+                "    pass\n"
+                "def a():\n"
+                "    target()\n"
+                "    target()\n"
+                "def b():\n"
+                "    target()\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_impact(store, "x.target", depth=1, limit=2)
+                self.assertEqual(
+                    {r["qualname"] for r in rows}, {"x.a", "x.b"})
+            finally:
+                store.close()
+
     def test_impact_rejects_negative_limit(self):
         with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
             query_impact(self.store, "pkg.cart.Cart", limit=-1)
