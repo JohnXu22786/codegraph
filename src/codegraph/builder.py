@@ -166,13 +166,22 @@ def _build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     emit = (lambda msg: None) if quiet else (log or print)
 
     db = Path(cfg.db_path)
+    prebuild_db = sqlite3.connect(":memory:")
+    snapshot_taken = False
+    if force and db.exists():
+        existing_db = sqlite3.connect(str(db))
+        try:
+            existing_db.backup(prebuild_db)
+            snapshot_taken = True
+        finally:
+            existing_db.close()
     if force and db.exists():
         db.unlink()
     db.parent.mkdir(parents=True, exist_ok=True)
 
     store = IndexStore(str(db))
-    prebuild_db = sqlite3.connect(":memory:")
-    store.conn.backup(prebuild_db)
+    if not snapshot_taken:
+        store.conn.backup(prebuild_db)
     store.set_meta("root", str(Path(cfg.root).resolve()))
     scan_config = _scan_config(cfg)
     scan_config_changed = store.get_meta("scan_config") != scan_config
