@@ -198,22 +198,24 @@ class IndexStore:
         symbol_ids = [row["id"] for row in symbols]
         call_ids = set()
         if symbol_ids:
-            placeholders = ", ".join("?" for _ in symbol_ids)
-            call_ids.update(
-                row["id"] for row in self.conn.execute(
-                    f"SELECT id FROM calls WHERE caller_id IN ({placeholders}) "
-                    f"OR callee_id IN ({placeholders})",
-                    (*symbol_ids, *symbol_ids),
-                )
-            )
-            self.conn.execute(
-                f"UPDATE calls SET caller_id = NULL WHERE caller_id IN ({placeholders})",
-                symbol_ids,
-            )
-            self.conn.execute(
-                f"UPDATE calls SET callee_id = NULL WHERE callee_id IN ({placeholders})",
-                symbol_ids,
-            )
+            variable_limit = 999
+            if hasattr(self.conn, "getlimit"):
+                variable_limit = self.conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+            batch_size = max(1, variable_limit)
+            for start in range(0, len(symbol_ids), batch_size):
+                batch = symbol_ids[start:start + batch_size]
+                placeholders = ", ".join("?" for _ in batch)
+                for column in ("caller_id", "callee_id"):
+                    call_ids.update(
+                        row["id"] for row in self.conn.execute(
+                            f"SELECT id FROM calls WHERE {column} IN ({placeholders})",
+                            batch,
+                        )
+                    )
+                    self.conn.execute(
+                        f"UPDATE calls SET {column} = NULL WHERE {column} IN ({placeholders})",
+                        batch,
+                    )
 
         import_ids = {
             row["id"] for row in self.conn.execute(

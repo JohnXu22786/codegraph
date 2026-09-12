@@ -1,5 +1,6 @@
 """Tests for the SQLite storage layer."""
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -82,6 +83,53 @@ class StoreTest(unittest.TestCase):
         self.store.upsert_file("b.py", "python", 5, "d2", 1)
         self.assertEqual(self.store.known_digests(), {"a.py": "d1", "b.py": "d2"})
         self.assertEqual(self.store.all_file_paths(), {"a.py", "b.py"})
+
+    @unittest.skipUnless(
+        hasattr(sqlite3.Connection, "setlimit"),
+        "requires sqlite3.Connection.setlimit",
+    )
+    def test_clear_references_handles_many_symbol_ids(self):
+        fid = self.store.upsert_file("large.py", "python", 10, "d", 1)
+        symbol_count = 11
+        previous_limit = self.store.conn.setlimit(
+            sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 10
+        )
+        try:
+            self.store.conn.executemany(
+                "INSERT INTO symbols(file_id, kind, name, qualname, parent, "
+                "start_line, end_line, signature, doc) VALUES(?,?,?,?,?,?,?,?,?)",
+                [
+                    (fid, "function", f"name_{i}", f"large.name_{i}", "", i, i, "", "")
+                    for i in range(symbol_count)
+                ],
+            )
+            symbol_ids = [
+                row["id"]
+                for row in self.store.conn.execute(
+                    "SELECT id FROM symbols WHERE file_id = ?", (fid,)
+                )
+            ]
+            self.store.conn.executemany(
+                "INSERT INTO calls(caller_id, caller_name, callee, callee_id, "
+                "file_id, line) VALUES(?,?,?,?,?,?)",
+                [
+                    (sid, f"name_{i}", f"target_{i}", sid, fid, i)
+                    for i, sid in enumerate(symbol_ids)
+                ],
+            )
+
+            impact = self.store.clear_references_to_file(fid)
+        finally:
+            self.store.conn.setlimit(
+                sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit
+            )
+
+        self.assertEqual(impact["call_ids"], set(range(1, symbol_count + 1)))
+        calls = self.store.conn.execute(
+            "SELECT caller_id, callee_id FROM calls"
+        ).fetchall()
+        self.assertTrue(all(row["caller_id"] is None for row in calls))
+        self.assertTrue(all(row["callee_id"] is None for row in calls))
 
     def test_second_open_reuses_data(self):
         self.store.upsert_file("a.py", "python", 10, "d1", 3)
