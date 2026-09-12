@@ -84,16 +84,15 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(self.store.known_digests(), {"a.py": "d1", "b.py": "d2"})
         self.assertEqual(self.store.all_file_paths(), {"a.py", "b.py"})
 
-    @unittest.skipUnless(
-        hasattr(sqlite3.Connection, "setlimit"),
-        "requires sqlite3.Connection.setlimit",
-    )
     def test_clear_references_handles_many_symbol_ids(self):
         fid = self.store.upsert_file("large.py", "python", 10, "d", 1)
-        symbol_count = 11
-        previous_limit = self.store.conn.setlimit(
-            sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 10
-        )
+        symbol_count = 1000
+        previous_limit = None
+        if (hasattr(self.store.conn, "setlimit") and
+                hasattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER")):
+            previous_limit = self.store.conn.setlimit(
+                sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 10
+            )
         try:
             self.store.conn.executemany(
                 "INSERT INTO symbols(file_id, kind, name, qualname, parent, "
@@ -120,9 +119,10 @@ class StoreTest(unittest.TestCase):
 
             impact = self.store.clear_references_to_file(fid)
         finally:
-            self.store.conn.setlimit(
-                sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit
-            )
+            if previous_limit is not None:
+                self.store.conn.setlimit(
+                    sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, previous_limit
+                )
 
         self.assertEqual(impact["call_ids"], set(range(1, symbol_count + 1)))
         calls = self.store.conn.execute(
