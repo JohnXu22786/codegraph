@@ -146,6 +146,49 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_python_relative_import_cannot_escape_package_depth(self):
+        """An over-deep relative import must not resolve a root-level module."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg" / "sub"
+            pkg.mkdir(parents=True)
+            (root / "x.py").write_text(
+                "value = 1\n", encoding="utf-8")
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "module.py").write_text(
+                "from ...x import value\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("pkg/sub/module.py")["id"]
+                self.assertIsNone(resolve_module(store, fid, "...x"))
+                self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+            finally:
+                store.close()
+
+    def test_dot_only_relative_import_beyond_package_depth_does_not_abort_indexing(self):
+        """An over-deep dot-only import must stay unresolved during indexing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "module.py").write_text(
+                "from .. import value\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("pkg/module.py")["id"]
+                self.assertIsNone(resolve_module(store, fid, ".."))
+                self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+            finally:
+                store.close()
+
     def test_unresolved_external(self):
         self.assertIsNone(self._callee("main.go", "fmt.Println"))
         self.assertIsNone(self._callee("pkg/cart.py", "os.getcwd"))
