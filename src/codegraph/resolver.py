@@ -300,6 +300,8 @@ def _imported_files(store: IndexStore, file_id: int):
     for imp in store.imports_for_file(file_id):
         if file["lang"] == "go" and _go_blank_import(imp):
             continue
+        target_file = store.file_by_id(imp["target_id"]) if imp["target_id"] else None
+        target_module = target_file["module"] if target_file else None
         if imp["target_id"]:
             out.add(imp["target_id"])
             if file["lang"] == "go":
@@ -354,6 +356,8 @@ def _imported_files(store: IndexStore, file_id: int):
                 base = ".".join(base_parts)
             for suffix in (nm, nm + ".__init__"):
                 full = f"{base}.{suffix}" if base else suffix
+                if full == target_module:
+                    continue
                 row = store.conn.execute(
                     "SELECT id FROM files WHERE module = ? ORDER BY id LIMIT 1",
                     (full,),
