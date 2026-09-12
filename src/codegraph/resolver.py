@@ -203,8 +203,11 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
             for _ in range(level - 1):
                 base = base.parent
             parts = rel_name.split(".") if rel_name else []
-            cands = [base.joinpath(*parts).with_suffix(".py")]
-            cands.append(base.joinpath(*parts) / "__init__.py")
+            target = base.joinpath(*parts)
+            cands = []
+            if target.name:
+                cands.append(target.with_suffix(".py"))
+            cands.append(target / "__init__.py")
         else:
             parts = module_text.split(".")
             cands = []

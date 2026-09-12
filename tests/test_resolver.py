@@ -151,6 +151,31 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_root_package_relative_import(self):
+        """from . import x inside a root __init__.py must resolve to x.py."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "__init__.py").write_text(
+                "from . import sibling\n\n"
+                "def expose(item):\n    return sibling.deliver(item)\n",
+                encoding="utf-8",
+            )
+            (root / "sibling.py").write_text(
+                "def deliver(item):\n    return item\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("__init__.py")["id"]
+                sid = resolve_callee(store, fid, "sibling.deliver")
+                self.assertIsNotNone(sid)
+                self.assertEqual(
+                    store.symbol_by_id(sid).qualname, "sibling.deliver"
+                )
+            finally:
+                store.close()
+
     def test_init_file_relative_import_base(self):
         """from . import ship inside pkg/__init__.py must resolve like pkg.ship."""
         with tempfile.TemporaryDirectory() as tmp:
