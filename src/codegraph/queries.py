@@ -147,6 +147,9 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
     for hop in range(1, max(0, depth) + 1):
         if not frontier:
             break
+        remaining = limit - len(results)
+        if remaining <= 0:
+            break
         placeholders = ",".join("?" for _ in frontier)
         sql = (f"SELECT s.id, s.qualname, s.kind, f.path "
                f"FROM calls c JOIN symbols s ON s.id = c.caller_id "
@@ -158,7 +161,7 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
             sql += f" AND s.id NOT IN ({visited_ph})"
             params += list(visited)
         sql += " LIMIT ?"
-        params.append(limit)
+        params.append(remaining)
         rows = store.conn.execute(sql, params)
         next_frontier = set()
         for r in rows:
