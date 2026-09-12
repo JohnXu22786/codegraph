@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,13 +32,23 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _scan_config(cfg: ProjectConfig) -> str:
+    """Serialize settings that affect per-file scan payloads."""
+    return json.dumps(
+        {"engine": cfg.engine, "language_map": cfg.language_map},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                 log=None) -> IndexReport:
     """Index (or refresh) the project described by ``cfg``.
 
-    Incremental mode compares content hashes: unchanged files are skipped,
-    changed files are re-parsed and their rows replaced atomically, files
-    that disappeared are dropped. ``force=True`` rebuilds every file.
+    Incremental mode compares content hashes and scan settings: unchanged
+    files are skipped, changed files are re-parsed and their rows replaced
+    atomically, files that disappeared are dropped. ``force=True`` rebuilds
+    every file.
     """
     started = time.monotonic()
     report = IndexReport()
@@ -50,6 +61,8 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
 
     store = IndexStore(str(db))
     store.set_meta("root", str(Path(cfg.root).resolve()))
+    scan_config = _scan_config(cfg)
+    scan_config_changed = store.get_meta("scan_config") != scan_config
     root = Path(cfg.root)
 
     discovered = discover_files(root, cfg)
@@ -74,7 +87,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             digest = _digest(data)
             prev = store.file_by_path(posix)
 
-            if not force and cfg.incremental:
+            if not force and cfg.incremental and not scan_config_changed:
                 if prev is not None and prev["digest"] == digest:
                     report.files_skipped += 1
                     continue
@@ -134,6 +147,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                     recheck_all_imports=added_file,
                 )
             store.set_meta("resolution_pending", "0")
+        store.set_meta("scan_config", scan_config)
         store.set_meta("last_indexed", store.now_iso())
         store.conn.commit()
 

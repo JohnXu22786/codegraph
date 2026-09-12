@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from codegraph.builder import build_index
 from codegraph.config import load_config
+from codegraph.models import FileScan, SymbolRec
 from codegraph.store import IndexStore
 
 from .fixtures import PROJ
@@ -101,6 +102,55 @@ class BuilderTest(unittest.TestCase):
         report = build_index(self._cfg(), force=True)
         self.assertEqual(report.files_changed, ALL_FILES)
         self.assertEqual(report.files_skipped, 0)
+
+    def test_language_map_change_replaces_unchanged_file_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "module.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            cfg.language_map = {".py": "javascript"}
+            report = build_index(cfg)
+
+            self.assertEqual(report.files_changed, 1)
+            self.assertEqual(report.files_skipped, 0)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(store.file_by_path("module.py")["lang"], "javascript")
+                self.assertIsNone(store.symbol_by_qualname("module.target"))
+            finally:
+                store.close()
+
+    def test_engine_change_replaces_unchanged_file_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "module.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            cfg.engine = "auto"
+            replacement = FileScan(
+                "python", "module",
+                [SymbolRec("function", "auto_marker", "module.auto_marker", "", 1, 1, "")],
+            )
+            with patch("codegraph.builder.scan_text", return_value=replacement) as scan:
+                report = build_index(cfg)
+
+            self.assertEqual(report.files_changed, 1)
+            self.assertEqual(report.files_skipped, 0)
+            scan.assert_called_once_with("def target():\n    return 1\n", "python",
+                                         "module.py", "auto")
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.symbol_by_qualname("module.auto_marker"))
+                self.assertIsNone(store.symbol_by_qualname("module.target"))
+            finally:
+                store.close()
 
     def test_last_indexed_meta_written(self):
         build_index(self._cfg())
