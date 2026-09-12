@@ -255,7 +255,8 @@ def _build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             report.calls += len(scan.calls)
             report.imports += len(scan.imports)
 
-        _assert_project_fresh(root, cfg, source_snapshot, source_paths)
+        if discovery_complete:
+            _assert_project_fresh(root, cfg, source_snapshot, source_paths)
         removed_paths = sorted(known - seen) if discovery_complete else []
         if removed_paths:
             # Persist the retry marker before a removal transaction commits.
@@ -271,7 +272,8 @@ def _build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             removed_file = True
             report.files_removed += 1
 
-        _assert_project_fresh(root, cfg, source_snapshot, source_paths)
+        if discovery_complete:
+            _assert_project_fresh(root, cfg, source_snapshot, source_paths)
         needs_resolution = (
             changed_file_ids or recheck_call_ids or recheck_import_ids or
             changed_symbol_names or removed_file or resolution_pending
@@ -297,7 +299,8 @@ def _build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         # Keep a changed config pending when a discovered file could not be
         # read or mapped, so the next run retries its stale payload.
         with store.transaction():
-            _assert_project_fresh(root, cfg, source_snapshot, source_paths)
+            if discovery_complete:
+                _assert_project_fresh(root, cfg, source_snapshot, source_paths)
             if needs_resolution:
                 store.set_meta("resolution_pending", "0")
             if scan_config_complete:
