@@ -28,6 +28,8 @@ _RESOLVER_VERSION = 18
 _SCANNER_VERSION = 20
 _build_locks = {}
 _build_locks_guard = threading.Lock()
+_root_build_locks = {}
+_root_build_locks_guard = threading.Lock()
 
 
 def _build_lock_for(db_path: Path):
@@ -71,6 +73,46 @@ def _build_process_lock(db_path: Path):
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _root_build_lock(root: Path, db_path: str):
+    """Serialize builds for one project across threads and processes."""
+    root = Path(root).resolve()
+    key = str(root)
+    with _root_build_locks_guard:
+        thread_lock = _root_build_locks.setdefault(key, threading.Lock())
+
+    with thread_lock:
+        lock_parent = Path(db_path).resolve().parent
+        lock_parent.mkdir(parents=True, exist_ok=True)
+        lock_name = f".codegraph-build-{_digest(key.encode())[:16]}.lock"
+        lock_path = lock_parent / lock_name
+        with lock_path.open("a+b") as lock_file:
+            if os.name == "nt":
+                lock_file.seek(0)
+                if not lock_file.read(1):
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                while True:
+                    try:
+                        msvcrt.locking(
+                            lock_file.fileno(), msvcrt.LK_NBLCK, 1
+                        )
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass
@@ -202,8 +244,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     atomically, files that disappeared are dropped. ``force=True`` rebuilds
     every file.
     """
-    with _build_lock_for(Path(cfg.db_path)):
-        return _build_index_locked(cfg, force=force, quiet=quiet, log=log)
+    with _root_build_lock(Path(cfg.root), cfg.db_path):
+        with _build_lock_for(Path(cfg.db_path)):
+            return _build_index_locked(cfg, force=force, quiet=quiet, log=log)
 
 
 def _build_index_locked(cfg: ProjectConfig, force: bool = False,
