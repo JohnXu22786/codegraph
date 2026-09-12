@@ -49,14 +49,20 @@ def _root_of(store: IndexStore) -> Path:
     return Path(store.get_meta("root") or ".")
 
 
-def resolve_callee(store: IndexStore, file_id: int, callee_text: str):
-    """Return the symbol id a call target refers to, or None."""
+def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
+                   blocked_file_ids=()):
+    """Return the symbol id a call target refers to, or None.
+
+    ``blocked_file_ids`` prevents fallback to symbols in import targets that
+    are not the selected candidate for the import.
+    """
     name = last_segment(callee_text)
     if not name:
         return None
     file = store.file_by_id(file_id)
     if file is None:
         return None
+    blocked_file_ids = set(blocked_file_ids)
 
     # 1. same file: exact qualname, then unique name
     row = store.conn.execute(
@@ -72,7 +78,7 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str):
         return rows[0]["id"]
 
     # 2. files reachable through this file's imports
-    candidates = _imported_files(store, file_id)
+    candidates = _imported_files(store, file_id) - blocked_file_ids
     for cid in candidates:
         row = store.conn.execute(
             "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? ORDER BY id LIMIT 1",
@@ -92,17 +98,20 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str):
     # 3. same module family (java package, go package, ts barrel files)
     if file["lang"] in ("java", "go", "javascript", "typescript"):
         rows = store.conn.execute(
-            "SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id "
+            "SELECT s.id, s.file_id FROM symbols s JOIN files f ON f.id = s.file_id "
             "WHERE f.module = ? AND f.id != ? AND s.name = ?",
             (file["module"], file_id, name),
         ).fetchall()
+        rows = [row for row in rows if row["file_id"] not in blocked_file_ids]
         if len(rows) == 1:
             return rows[0]["id"]
 
     # 4. globally unique name (last resort heuristic)
     rows = store.conn.execute(
-        "SELECT id FROM symbols WHERE name = ? LIMIT 2", (name,)
+        "SELECT id, file_id FROM symbols WHERE name = ? LIMIT 2", (name,)
     ).fetchall()
+    if any(row["file_id"] in blocked_file_ids for row in rows):
+        return None
     if len(rows) == 1:
         return rows[0]["id"]
     return None
@@ -153,11 +162,11 @@ def _names_of(imp) -> list:
         return []
 
 
-def resolve_module(store: IndexStore, file_id: int, module_text: str):
-    """Return the file id an import statement refers to, or None."""
+def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
+    """Return root-relative file paths considered for a module import."""
     file = store.file_by_id(file_id)
     if file is None or not module_text:
-        return None
+        return []
     root = _root_of(store).resolve()
     lang = file["lang"]
     file_dir = Path(file["path"]).parent  # relative to root
@@ -172,24 +181,17 @@ def resolve_module(store: IndexStore, file_id: int, module_text: str):
     # --- relative paths (js/ts: "./x", "../y") ----------------------------
     if module_text.startswith("./") or module_text.startswith("../"):
         if lang not in ("javascript", "typescript", "rust"):
-            return None
+            return []
         target = rel_of(file_dir / module_text)
         if target is None:
-            return None
+            return []
         candidates = []
         if target.suffix:
             candidates.append(target)
         # same-language extensions first, then the rest
         ordered = _EXT_BY_LANG[lang] + [e for e in _ALL_EXTS if e not in _EXT_BY_LANG[lang]]
-        if target.suffix:
-            candidates.extend(target.with_suffix(ext) for ext in ordered)
-        else:
-            candidates.extend(target.with_suffix(ext) for ext in ordered)
-        for cand in candidates:
-            row = store.file_by_path(cand.as_posix())
-            if row:
-                return row["id"]
-        return None
+        candidates.extend(target.with_suffix(ext) for ext in ordered)
+        return candidates
 
     # --- python ------------------------------------------------------------
     if lang == "python":
@@ -210,27 +212,16 @@ def resolve_module(store: IndexStore, file_id: int, module_text: str):
                     break
                 cands.append(up.joinpath(*parts).with_suffix(".py"))
                 cands.append(up.joinpath(*parts) / "__init__.py")
-        for cand in cands:
-            rel = rel_of(cand)
-            if rel is not None:
-                row = store.file_by_path(rel.as_posix())
-                if row:
-                    return row["id"]
-        return None
+        return [rel for cand in cands if (rel := rel_of(cand)) is not None]
 
     # --- rust: crate/super/std are external, mod items map to files -------
     if lang == "rust":
         if module_text in ("std", "core", "alloc") or \
                 module_text.startswith(("std::", "core::", "alloc::")):
-            return None
+            return []
         base = module_text.split("::")[0]
-        for cand in (file_dir / f"{base}.rs", file_dir / base / "mod.rs"):
-            rel = rel_of(cand)
-            if rel is not None:
-                row = store.file_by_path(rel.as_posix())
-                if row:
-                    return row["id"]
-        return None
+        return [rel for cand in (file_dir / f"{base}.rs", file_dir / base / "mod.rs")
+                if (rel := rel_of(cand)) is not None]
 
     # --- go / java: try the module text as a path under the root ----------
     parts = module_text.split(".")
@@ -239,13 +230,32 @@ def resolve_module(store: IndexStore, file_id: int, module_text: str):
         cands.append(Path(*parts).with_suffix(ext))
     if lang == "go":
         cands.append(Path(*parts) / "main.go")
-    for cand in cands:
-        rel = rel_of(cand)
-        if rel is not None:
-            row = store.file_by_path(rel.as_posix())
-            if row:
-                return row["id"]
+    return [rel for cand in cands if (rel := rel_of(cand)) is not None]
+
+
+def resolve_module(store: IndexStore, file_id: int, module_text: str):
+    """Return the file id an import statement refers to, or None."""
+    for cand in _module_candidate_paths(store, file_id, module_text):
+        row = store.file_by_path(cand.as_posix())
+        if row:
+            return row["id"]
     return None
+
+
+def _competing_import_files(store: IndexStore, file_id: int):
+    """Return candidates that are not selected by any import in the file."""
+    blocked = set()
+    imports = store.imports_for_file(file_id)
+    selected = {imp["target_id"] for imp in imports if imp["target_id"] is not None}
+    for imp in imports:
+        target_id = imp["target_id"]
+        if target_id is None:
+            continue
+        for path in _module_candidate_paths(store, file_id, imp["module"]):
+            row = store.file_by_path(path.as_posix())
+            if row and row["id"] != target_id and row["id"] not in selected:
+                blocked.add(row["id"])
+    return blocked
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -300,6 +310,16 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                         "SELECT id FROM imports"
                     )
                 )
+                # Import target changes can invalidate calls without clearing
+                # their old callee_id, so revisit calls in importing files.
+                call_ids.update(
+                    row["id"] for row in store.conn.execute(
+                        "SELECT c.id FROM calls c "
+                        "WHERE EXISTS ("
+                        "SELECT 1 FROM imports i WHERE i.file_id = c.file_id"
+                        ")"
+                    )
+                )
             if symbol_names:
                 names = set(symbol_names)
                 call_ids.update(
@@ -332,11 +352,22 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
             else:
                 call_rows = []
 
+        previous_imported_files = {
+            file_id: _imported_files(store, file_id)
+            for file_id in {row["file_id"] for row in call_rows}
+        }
+
         for row in import_rows:
             target = resolve_module(store, row["file_id"], row["module"])
             store.conn.execute(
                 "UPDATE imports SET target_id = ? WHERE id = ?", (target, row["id"])
             )
+
+        blocked_import_files = {}
+        for file_id in previous_imported_files:
+            blocked = previous_imported_files[file_id] - _imported_files(store, file_id)
+            blocked.update(_competing_import_files(store, file_id))
+            blocked_import_files[file_id] = blocked
 
         for row in call_rows:
             caller_id = None
@@ -347,7 +378,12 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                     (row["file_id"], row["caller_name"]),
                 ).fetchone()
                 caller_id = sym["id"] if sym else None
-            callee_id = resolve_callee(store, row["file_id"], row["callee"])
+            callee_id = resolve_callee(
+                store,
+                row["file_id"],
+                row["callee"],
+                blocked_file_ids=blocked_import_files.get(row["file_id"], ()),
+            )
             store.conn.execute(
                 "UPDATE calls SET caller_id = ?, callee_id = ? WHERE id = ?",
                 (caller_id, callee_id, row["id"]),
