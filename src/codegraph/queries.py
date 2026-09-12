@@ -32,6 +32,21 @@ def _resolve_module_arg(store: IndexStore, module: str):
     return store.file_by_module(module)
 
 
+def _resolve_module_files(store: IndexStore, module: str):
+    """Map a path to one file or a module id to all matching files."""
+    if not module:
+        return []
+    row = store.file_by_path(module)
+    if row:
+        return [row]
+    row = store.file_by_path(module + ".py")
+    if row:
+        return [row]
+    return store.conn.execute(
+        "SELECT * FROM files WHERE module = ? ORDER BY id", (module,)
+    ).fetchall()
+
+
 def query_callers(store: IndexStore, symbol: str, limit: int = 100):
     """Symbols that call ``symbol`` directly (callers of callers via impact)."""
     if limit < 0:
@@ -76,14 +91,15 @@ def query_deps(store: IndexStore, module: str, limit: int = 200):
     """Modules a file/package imports (its dependencies)."""
     if limit < 0:
         raise ValueError("limit must be non-negative")
-    file = _resolve_module_arg(store, module)
-    if file is None:
+    files = _resolve_module_files(store, module)
+    if not files:
         return []
+    placeholders = ", ".join("?" for _ in files)
     rows = store.conn.execute(
         "SELECT i.module, i.names, i.kind, i.line, f.path AS target_path "
         "FROM imports i LEFT JOIN files f ON f.id = i.target_id "
-        "WHERE i.file_id = ? ORDER BY i.line LIMIT ?",
-        (file["id"], limit),
+        f"WHERE i.file_id IN ({placeholders}) ORDER BY i.file_id, i.line LIMIT ?",
+        [file["id"] for file in files] + [limit],
     )
     return [{"module": r["module"], "kind": r["kind"],
              "target_path": r["target_path"] or "", "line": r["line"]} for r in rows]
