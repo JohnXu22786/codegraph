@@ -22,6 +22,7 @@ class TTLCache:
         if time.monotonic() >= expires:
             del self._data[key]
             return None
+        self._data.move_to_end(key)
         return value
 
     def put(self, key, value):
