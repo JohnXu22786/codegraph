@@ -57,13 +57,15 @@ def default_config(root) -> ProjectConfig:
 def load_config(root=None, config_path=None) -> ProjectConfig:
     """Resolve the effective config: flags > environment > file > defaults."""
     cwd = Path.cwd()
-    base_root = Path(root or os.environ.get(ENV_PREFIX + "ROOT") or cwd).resolve()
+    env_root = os.environ.get(ENV_PREFIX + "ROOT")
+    base_root = Path(root or env_root or cwd).resolve()
+    root_is_scoped = bool(root or env_root)
     cfg = default_config(base_root)
 
     cfg_file = Path(config_path) if config_path else Path(cfg.root) / CONFIG_NAME
     if cfg_file.is_file():
         data = json.loads(cfg_file.read_text(encoding="utf-8"))
-        if "root" in data:
+        if "root" in data and not root_is_scoped:
             cfg.root = str(Path(data["root"]).resolve() if Path(data["root"]).is_absolute()
                            else (cfg_file.parent / data["root"]).resolve())
         for key in ("include", "exclude", "max_file_kb", "incremental", "engine",

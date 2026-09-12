@@ -66,6 +66,28 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(cfg.engine, "quick")
         self.assertEqual(cfg.max_file_kb, 64)
 
+    def test_scoped_root_precedes_file_root(self):
+        explicit_root = self.root / "explicit"
+        environment_root = self.root / "environment"
+        for selected_root in (explicit_root, environment_root):
+            selected_root.mkdir()
+            (selected_root / "codegraph.json").write_text(
+                json.dumps({"root": "file-root"}), encoding="utf-8",
+            )
+
+        cases = (
+            (str(explicit_root), ""),
+            (None, str(environment_root)),
+        )
+        for requested_root, environment_value in cases:
+            with self.subTest(requested_root=requested_root):
+                with mock.patch.dict(
+                    os.environ, {"CODEGRAPH_ROOT": environment_value}
+                ):
+                    cfg = load_config(root=requested_root)
+                expected_root = Path(requested_root or environment_value).resolve()
+                self.assertEqual(cfg.root, str(expected_root))
+
     def test_include_as_string_is_rejected(self):
         # a string include would be iterated char-by-char by the walker
         (self.root / "codegraph.json").write_text(
