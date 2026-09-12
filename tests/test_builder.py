@@ -97,6 +97,62 @@ class BuilderTest(unittest.TestCase):
         self.assertIsNone(store.file_by_path("helper.go"))
         store.close()
 
+    def test_inaccessible_directory_preserves_indexed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hidden = root / "hidden"
+            target = hidden / "keep.py"
+            hidden.mkdir()
+            target.write_text("def keep():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            def incomplete_walk(path, followlinks=False, onerror=None):
+                if onerror is not None:
+                    onerror(PermissionError(13, "Permission denied", str(hidden)))
+                yield str(root), [], []
+
+            with patch("codegraph.scanner.walk.os.walk", incomplete_walk):
+                report = build_index(cfg, quiet=True)
+
+            self.assertEqual(report.files_removed, 0)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.file_by_path("hidden/keep.py"))
+            finally:
+                store.close()
+
+    def test_transient_stat_failure_preserves_indexed_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "keep.py"
+            target.write_text("def keep():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            original_stat = Path.stat
+            failed = False
+
+            def fail_target_once(path, *args, **kwargs):
+                nonlocal failed
+                if path == target and not failed:
+                    failed = True
+                    raise OSError("temporary stat failure")
+                return original_stat(path, *args, **kwargs)
+
+            with patch.object(Path, "stat", fail_target_once):
+                report = build_index(cfg, quiet=True)
+
+            self.assertTrue(failed)
+            self.assertEqual(report.files_removed, 0)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.file_by_path("keep.py"))
+            finally:
+                store.close()
+
     def test_deleted_file_interruption_keeps_resolution_pending(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
