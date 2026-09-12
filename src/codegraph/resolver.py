@@ -300,6 +300,16 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                         "SELECT id FROM imports"
                     )
                 )
+                # Import target changes can invalidate calls without clearing
+                # their old callee_id, so revisit calls in importing files.
+                call_ids.update(
+                    row["id"] for row in store.conn.execute(
+                        "SELECT c.id FROM calls c "
+                        "WHERE EXISTS ("
+                        "SELECT 1 FROM imports i WHERE i.file_id = c.file_id"
+                        ")"
+                    )
+                )
             if symbol_names:
                 names = set(symbol_names)
                 call_ids.update(

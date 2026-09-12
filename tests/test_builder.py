@@ -236,6 +236,44 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_new_higher_priority_import_candidate_re_resolves_dependent_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "entry.ts").write_text(
+                'import { old } from "./util";\n'
+                "export function invoke() {\n"
+                "  return old();\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (root / "util.js").write_text(
+                "export function old() { return 1; }\n", encoding="utf-8")
+            (root / "other.js").write_text(
+                "export function old() { return 3; }\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="old")
+                self.assertEqual(
+                    store.file_by_id(call["callee_id"])["path"], "util.js"
+                )
+            finally:
+                store.close()
+
+            (root / "util.ts").write_text(
+                "export function replacement() { return 2; }\n", encoding="utf-8")
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="old")
+                self.assertIsNone(call["callee_id"])
+            finally:
+                store.close()
+
     def test_new_duplicate_symbol_invalidates_resolved_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
