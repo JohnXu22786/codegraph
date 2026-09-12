@@ -83,6 +83,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             if lang is None:  # race with discovery config changes
                 continue
             text = data.decode("utf-8-sig", errors="replace")
+            # Mark before scanning so a later scan failure preserves a retry
+            # marker for payloads committed earlier in this run.
+            store.set_meta("resolution_pending", "1")
             scan = scan_text(text, lang, posix, cfg.engine)
             # digest update and payload replacement share one transaction so
             # a crash mid-replace can never leave a stale-but-skipped file
