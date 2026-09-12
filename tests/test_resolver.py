@@ -154,10 +154,15 @@ class ResolverTest(unittest.TestCase):
             pkg.mkdir(parents=True)
             (root / "x.py").write_text(
                 "value = 1\n", encoding="utf-8")
+            (root / "y.py").write_text(
+                "def foo():\n    return 1\n", encoding="utf-8")
             (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
             (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (root / "pkg" / "other.py").write_text(
+                "def foo():\n    return 1\n", encoding="utf-8")
             (pkg / "module.py").write_text(
-                "from ...x import value\n", encoding="utf-8")
+                "from ...x import y\n\n"
+                "def call():\n    return y.foo()\n", encoding="utf-8")
             cfg = load_config(root=str(root))
             cfg.engine = "quick"
             build_index(cfg)
@@ -166,6 +171,7 @@ class ResolverTest(unittest.TestCase):
                 fid = store.file_by_path("pkg/sub/module.py")["id"]
                 self.assertIsNone(resolve_module(store, fid, "...x"))
                 self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+                self.assertIsNone(resolve_callee(store, fid, "y.foo"))
             finally:
                 store.close()
 

@@ -129,6 +129,8 @@ def _imported_files(store: IndexStore, file_id: int):
                     base_parts = mod_parts
                 else:
                     base_parts = mod_parts[:-1]
+                if level > len(base_parts):
+                    continue
                 for _ in range(level - 1):
                     if base_parts:
                         base_parts = base_parts[:-1]
