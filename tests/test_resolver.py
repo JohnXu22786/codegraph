@@ -195,6 +195,35 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_root_package_relative_import_resolves_from_module(self):
+        """A root package contributes one level to relative-import depth."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "__init__.py").write_text("", encoding="utf-8")
+            (root / "sibling.py").write_text(
+                "def value():\n    return 1\n", encoding="utf-8")
+            (root / "decoy.py").write_text(
+                "def value():\n    return 1\n", encoding="utf-8")
+            (root / "module.py").write_text(
+                "from . import sibling\n\n"
+                "def call():\n    return sibling.value()\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("module.py")["id"]
+                self.assertEqual(
+                    resolve_module(store, fid, "."),
+                    store.file_by_path("__init__.py")["id"],
+                )
+                sid = resolve_callee(store, fid, "sibling.value")
+                self.assertIsNotNone(sid)
+                self.assertEqual(store.symbol_by_id(sid).qualname, "sibling.value")
+                self.assertIsNone(resolve_module(store, fid, "..sibling"))
+            finally:
+                store.close()
+
     def test_unresolved_external(self):
         self.assertIsNone(self._callee("main.go", "fmt.Println"))
         self.assertIsNone(self._callee("pkg/cart.py", "os.getcwd"))
