@@ -47,6 +47,14 @@ class CliSmokeTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
         self.assertTrue((self.root / "codegraph.json").exists())
 
+    def test_common_options_before_subcommand(self):
+        proc = _run(["index", "--root", str(self.root)], cwd=self.tmp.name)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+
+        proc = _run(["--root", str(self.root), "status"], cwd=self.tmp.name)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        self.assertIn(f"root: {self.root}", proc.stdout.decode("utf-8", "replace"))
+
     def test_index_then_queries(self):
         proc = _run(["index", "--root", str(self.root)], cwd=self.tmp.name)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))

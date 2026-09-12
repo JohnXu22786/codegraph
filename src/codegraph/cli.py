@@ -174,24 +174,35 @@ def _cmd_serve(args, cfg):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Common options are accepted on the root parser and every subcommand so
+    # they may appear before or after the subcommand name.  Suppressing the
+    # parent defaults keeps an absent subcommand option from overwriting a
+    # value parsed before the subcommand.
+    common = argparse.ArgumentParser(add_help=False,
+                                     argument_default=argparse.SUPPRESS)
+    common.add_argument("--root",
+                        help="project root (default: current directory)")
+    common.add_argument("--config",
+                        help="path to a codegraph.json config file")
+    common.add_argument("--db",
+                        help="override the index database path")
+    common.add_argument("--json", action="store_true", dest="json",
+                        help="machine-readable output where supported")
+
     parser = argparse.ArgumentParser(
         prog="codegraph",
         description="Code knowledge graph: index a codebase and answer "
                     "call/dependency questions.",
     )
-    parser.add_argument("--version", action="version", version=__version__)
-
-    # common options, also injected into every subcommand so they may appear
-    # before or after the subcommand name
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--root", default=None,
+    parser.add_argument("--root", default=None,
                         help="project root (default: current directory)")
-    common.add_argument("--config", default=None,
+    parser.add_argument("--config", default=None,
                         help="path to a codegraph.json config file")
-    common.add_argument("--db", default=None,
+    parser.add_argument("--db", default=None,
                         help="override the index database path")
-    common.add_argument("--json", action="store_true", dest="json",
+    parser.add_argument("--json", action="store_true", dest="json",
                         help="machine-readable output where supported")
+    parser.add_argument("--version", action="version", version=__version__)
 
     sub = parser.add_subparsers(dest="command", required=True)
 
