@@ -293,6 +293,8 @@ class IndexStore:
         ).fetchone()
 
     def symbols_by_name(self, name, limit=10):
+        if limit < 0:
+            raise ValueError("limit must be non-negative")
         return self.conn.execute(
             "SELECT * FROM symbols WHERE name = ? ORDER BY id LIMIT ?", (name, limit)
         ).fetchall()

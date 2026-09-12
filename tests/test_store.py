@@ -78,6 +78,14 @@ class StoreTest(unittest.TestCase):
         self.store.remove_file("a.py")
         self.assertEqual(self.store.search("hello"), [])
 
+    def test_symbols_by_name_rejects_negative_limit(self):
+        fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
+        with self.store.transaction():
+            self.store.replace_file_payload(fid, _sample_scan("a.py"))
+
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            self.store.symbols_by_name("hello", limit=-1)
+
     def test_search_rejects_negative_limit(self):
         with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
             self.store.search("hello", limit=-1)
