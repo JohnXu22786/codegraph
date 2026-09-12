@@ -122,7 +122,13 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             report.calls += len(scan.calls)
             report.imports += len(scan.imports)
 
-        for path in sorted(known - seen):
+        removed_paths = sorted(known - seen)
+        if removed_paths:
+            # Persist the retry marker before a removal transaction commits.
+            # Otherwise an interruption after removal can leave cleared
+            # incoming edges with no signal for the next incremental run.
+            store.set_meta("resolution_pending", "1")
+        for path in removed_paths:
             with store.transaction():
                 impact = store.remove_file(path)
             recheck_call_ids.update(impact["call_ids"])
