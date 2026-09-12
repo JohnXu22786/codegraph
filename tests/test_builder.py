@@ -155,6 +155,38 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_removed_duplicate_symbol_resolves_calls_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "caller.py").write_text(
+                "def invoke():\n    return target()\n", encoding="utf-8")
+            (root / "first.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            (root / "second.py").write_text(
+                "def target():\n    return 2\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNone(store.find_call(callee="target")["callee_id"])
+            finally:
+                store.close()
+
+            (root / "second.py").unlink()
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="target")
+                self.assertIsNotNone(call["callee_id"])
+                self.assertEqual(
+                    store.symbol_by_id(call["callee_id"]).qualname, "first.target"
+                )
+            finally:
+                store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -109,7 +109,8 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             changed_symbol_names.update(impact["symbol_names"])
             report.files_removed += 1
 
-        if changed_file_ids or recheck_call_ids or recheck_import_ids:
+        if (changed_file_ids or recheck_call_ids or recheck_import_ids or
+                changed_symbol_names):
             resolve_all(
                 store,
                 file_ids=changed_file_ids,
