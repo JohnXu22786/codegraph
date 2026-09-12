@@ -60,6 +60,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     recheck_import_ids = set()
     changed_symbol_names = set()
     added_file = False
+    resolution_pending = store.get_meta("resolution_pending") == "1"
 
     try:
         for rel in discovered:
@@ -109,16 +110,27 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             changed_symbol_names.update(impact["symbol_names"])
             report.files_removed += 1
 
-        if (changed_file_ids or recheck_call_ids or recheck_import_ids or
-                changed_symbol_names):
-            resolve_all(
-                store,
-                file_ids=changed_file_ids,
-                call_ids=recheck_call_ids,
-                import_ids=recheck_import_ids,
-                symbol_names=changed_symbol_names,
-                recheck_all_imports=added_file,
-            )
+        needs_resolution = (
+            changed_file_ids or recheck_call_ids or recheck_import_ids or
+            changed_symbol_names or resolution_pending
+        )
+        if needs_resolution:
+            # Payload transactions commit before this pass. Persist the retry
+            # marker first so a failed resolution is retried on the next run
+            # instead of being hidden by unchanged file digests.
+            store.set_meta("resolution_pending", "1")
+            if resolution_pending:
+                resolve_all(store)
+            else:
+                resolve_all(
+                    store,
+                    file_ids=changed_file_ids,
+                    call_ids=recheck_call_ids,
+                    import_ids=recheck_import_ids,
+                    symbol_names=changed_symbol_names,
+                    recheck_all_imports=added_file,
+                )
+            store.set_meta("resolution_pending", "0")
         store.set_meta("last_indexed", store.now_iso())
         store.conn.commit()
 
