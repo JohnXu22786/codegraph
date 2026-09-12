@@ -179,6 +179,7 @@ test('codegraph_reindex builds an index, then queries work', async () => {
     assert.equal(overview.ok, true)
     assert.equal(typeof overview.data.files, 'number')
   } finally {
+    await closePlugin()
     rmSync(scratch, { recursive: true, force: true })
   }
 })
