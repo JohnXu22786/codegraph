@@ -352,11 +352,13 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
             else:
                 call_rows = []
 
-            if recheck_all_imports:
-                previous_imported_files = {
-                    file_id: _imported_files(store, file_id)
-                    for file_id in {row["file_id"] for row in call_rows}
-                }
+        if file_ids is None or recheck_all_imports:
+            # A full retry or an all-import recheck can change target IDs
+            # before calls are resolved, so preserve the prior reachability.
+            previous_imported_files = {
+                file_id: _imported_files(store, file_id)
+                for file_id in {row["file_id"] for row in call_rows}
+            }
 
         for row in import_rows:
             target = resolve_module(store, row["file_id"], row["module"])
