@@ -49,6 +49,8 @@ def _resolve_module_files(store: IndexStore, module: str):
 
 def query_callers(store: IndexStore, symbol: str, limit: int = 100):
     """Symbols that call ``symbol`` directly (callers of callers via impact)."""
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
     sym = _find_symbol(store, symbol)
     if sym is None:
         return []
@@ -67,6 +69,8 @@ def query_callers(store: IndexStore, symbol: str, limit: int = 100):
 
 def query_callees(store: IndexStore, symbol: str, limit: int = 100):
     """Everything ``symbol`` calls, resolved or not."""
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
     sym = _find_symbol(store, symbol)
     if sym is None:
         return []
@@ -85,6 +89,8 @@ def query_callees(store: IndexStore, symbol: str, limit: int = 100):
 
 def query_deps(store: IndexStore, module: str, limit: int = 200):
     """Modules a file/package imports (its dependencies)."""
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
     files = _resolve_module_files(store, module)
     if not files:
         return []
@@ -196,6 +202,8 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
 
 def query_search(store: IndexStore, text: str, limit: int = 20):
     """Full-text search over symbol names, docs and signatures."""
+    if limit < 0:
+        raise ValueError("limit must be non-negative")
     return store.search(text, limit)
 
 

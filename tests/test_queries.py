@@ -48,6 +48,10 @@ class QueryTest(unittest.TestCase):
     def test_callers_nonexistent(self):
         self.assertEqual(query_callers(self.store, "nope.nope"), [])
 
+    def test_callers_rejects_negative_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            query_callers(self.store, "pkg.pricing.price", limit=-1)
+
     def test_callees_of_main(self):
         rows = query_callees(self.store, "app.main")
         callees = sorted(
@@ -56,6 +60,10 @@ class QueryTest(unittest.TestCase):
         self.assertIn(("cart.add", True), callees)
         self.assertIn(("cart.total", True), callees)
         self.assertIn(("create_cart", True), callees)
+
+    def test_callees_rejects_negative_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            query_callees(self.store, "app.main", limit=-1)
 
     def test_callees_of_go_main(self):
         rows = query_callees(self.store, "main.main")
@@ -81,6 +89,10 @@ class QueryTest(unittest.TestCase):
         rows = query_deps(self.store, "web/index.ts")
         got = sorted((r["module"], r["target_path"]) for r in rows)
         self.assertEqual(got, [("./logger", "web/logger.ts"), ("./util", "web/util.ts")])
+
+    def test_deps_rejects_negative_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            query_deps(self.store, "pkg.cart", limit=-1)
 
     def test_deps_of_go_package_aggregates_files(self):
         """Package queries include imports from every file in the package."""
@@ -208,6 +220,10 @@ class QueryTest(unittest.TestCase):
 
     def test_search_empty_query(self):
         self.assertEqual(query_search(self.store, "  "), [])
+
+    def test_search_rejects_negative_limit(self):
+        with self.assertRaisesRegex(ValueError, "limit must be non-negative"):
+            query_search(self.store, "discount", limit=-1)
 
     def test_dependents_via_relative_import(self):
         """dependents() must see files importing the module with ``from .``."""
