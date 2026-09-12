@@ -920,7 +920,9 @@ class BuilderTest(unittest.TestCase):
             self.assertFalse(force_thread.is_alive())
             self.assertIsNotNone(incremental_thread)
             self.assertFalse(incremental_thread.is_alive())
-            self.assertEqual(errors, [])
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertIn("source changed during index build", str(errors[0]))
             store = IndexStore(str(cfg.db_path))
             try:
                 self.assertIsNotNone(
@@ -1061,7 +1063,9 @@ class BuilderTest(unittest.TestCase):
             self.assertFalse(first_thread.is_alive())
             self.assertIsNotNone(second_thread)
             self.assertFalse(second_thread.is_alive())
-            self.assertEqual(errors, [])
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertIn("source changed during index build", str(errors[0]))
             store = IndexStore(str(cfg.db_path))
             try:
                 self.assertIsNotNone(

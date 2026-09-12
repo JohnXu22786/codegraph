@@ -282,43 +282,6 @@ def _assert_project_fresh(root: Path, cfg: ProjectConfig, expected: dict,
         raise _StaleBuildError("project sources changed during index build; retry")
 
 
-@contextmanager
-def _root_build_lock(root: Path, db_path: str):
-    """Serialize builds for one project across threads and processes."""
-    root = Path(root).resolve()
-    key = str(root)
-    with _ROOT_LOCKS_GUARD:
-        thread_lock = _ROOT_LOCKS.setdefault(key, threading.Lock())
-
-    with thread_lock:
-        lock_parent = Path(db_path).resolve().parent
-        lock_name = f".codegraph-build-{_digest(str(root).encode())[:16]}.lock"
-        lock_path = lock_parent / lock_name
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+b") as lock_file:
-            if fcntl is not None:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            elif msvcrt is not None:  # pragma: no cover - Windows only
-                lock_file.seek(0)
-                if not lock_file.read(1):
-                    lock_file.seek(0)
-                    lock_file.write(b"\0")
-                    lock_file.flush()
-                lock_file.seek(0)
-                while True:
-                    try:
-                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                        break
-                    except OSError:
-                        time.sleep(0.05)
-            try:
-                yield
-            finally:
-                if fcntl is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                elif msvcrt is not None:  # pragma: no cover - Windows only
-                    lock_file.seek(0)
-                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UN, 1)
 def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                 log=None) -> IndexReport:
     """Index (or refresh) the project described by ``cfg``.
@@ -566,15 +529,18 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
                     symbol_names=changed_symbol_names,
                     recheck_all_imports=added_file or removed_file,
                 )
-            store.set_meta("resolution_pending", "0")
-        # Keep a changed config pending when discovery or a discovered file
-        # could not complete, so the next run retries its stale payload.
-        if scan_config_complete:
-            store.set_meta("scan_config", scan_config)
-        store.set_meta("last_indexed", store.now_iso())
-        if discovery_complete:
-            _assert_project_fresh(root, cfg, source_snapshot, source_paths)
-        store.conn.commit()
+            # Keep the retry marker set until the final freshness check and
+            # metadata commit succeed.
+        # Keep a changed config pending when a discovered file could not be
+        # read or mapped, so the next run retries its stale payload.
+        with store.transaction():
+            if discovery_complete:
+                _assert_project_fresh(root, cfg, source_snapshot, source_paths)
+            if needs_resolution:
+                store.set_meta("resolution_pending", "0")
+            if scan_config_complete:
+                store.set_meta("scan_config", scan_config)
+            store.set_meta("last_indexed", store.now_iso())
 
         for row in store.conn.execute(
                 "SELECT lang, COUNT(*) AS n FROM files GROUP BY lang ORDER BY lang"):
