@@ -74,6 +74,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     recheck_import_ids = set()
     changed_symbol_names = set()
     added_file = False
+    removed_file = False
     resolution_pending = store.get_meta("resolution_pending") == "1"
 
     try:
@@ -127,6 +128,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             recheck_call_ids.update(impact["call_ids"])
             recheck_import_ids.update(impact["import_ids"])
             changed_symbol_names.update(impact["symbol_names"])
+            removed_file = True
             report.files_removed += 1
 
         needs_resolution = (
@@ -147,7 +149,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                     call_ids=recheck_call_ids,
                     import_ids=recheck_import_ids,
                     symbol_names=changed_symbol_names,
-                    recheck_all_imports=added_file,
+                    recheck_all_imports=added_file or removed_file,
                 )
             store.set_meta("resolution_pending", "0")
         # Keep a changed config pending when a discovered file could not be

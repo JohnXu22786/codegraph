@@ -323,6 +323,54 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_deleted_import_candidate_rechecks_calls_in_importing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "entry.ts").write_text(
+                'import { replacement } from "./util";\n'
+                "export function invoke() {\n"
+                "  return replacement();\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (root / "util.ts").write_text(
+                "export const selected = true;\n", encoding="utf-8")
+            (root / "util.js").write_text(
+                "export function replacement() { return 1; }\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(
+                    store.find_import(module="./util")["target_id"],
+                    store.file_by_path("util.ts")["id"],
+                )
+                self.assertIsNone(store.find_call(callee="replacement")["callee_id"])
+            finally:
+                store.close()
+
+            (root / "util.ts").unlink()
+            report = build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(report.files_removed, 1)
+                self.assertEqual(
+                    store.find_import(module="./util")["target_id"],
+                    store.file_by_path("util.js")["id"],
+                )
+                call = store.find_call(callee="replacement")
+                self.assertIsNotNone(call["callee_id"])
+                self.assertEqual(
+                    store.file_by_id(call["callee_id"])["path"], "util.js"
+                )
+            finally:
+                store.close()
+
     def test_import_target_change_does_not_fallback_to_obsolete_symbol(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
