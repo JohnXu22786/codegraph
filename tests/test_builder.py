@@ -248,8 +248,6 @@ class BuilderTest(unittest.TestCase):
             )
             (root / "util.js").write_text(
                 "export function old() { return 1; }\n", encoding="utf-8")
-            (root / "other.js").write_text(
-                "export function old() { return 3; }\n", encoding="utf-8")
             cfg = load_config(root=str(root))
             cfg.engine = "quick"
             build_index(cfg)

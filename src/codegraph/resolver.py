@@ -49,14 +49,20 @@ def _root_of(store: IndexStore) -> Path:
     return Path(store.get_meta("root") or ".")
 
 
-def resolve_callee(store: IndexStore, file_id: int, callee_text: str):
-    """Return the symbol id a call target refers to, or None."""
+def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
+                   blocked_file_ids=()):
+    """Return the symbol id a call target refers to, or None.
+
+    ``blocked_file_ids`` prevents fallback to symbols in import targets that
+    were invalidated during an incremental import recheck.
+    """
     name = last_segment(callee_text)
     if not name:
         return None
     file = store.file_by_id(file_id)
     if file is None:
         return None
+    blocked_file_ids = set(blocked_file_ids)
 
     # 1. same file: exact qualname, then unique name
     row = store.conn.execute(
@@ -92,17 +98,20 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str):
     # 3. same module family (java package, go package, ts barrel files)
     if file["lang"] in ("java", "go", "javascript", "typescript"):
         rows = store.conn.execute(
-            "SELECT s.id FROM symbols s JOIN files f ON f.id = s.file_id "
+            "SELECT s.id, s.file_id FROM symbols s JOIN files f ON f.id = s.file_id "
             "WHERE f.module = ? AND f.id != ? AND s.name = ?",
             (file["module"], file_id, name),
         ).fetchall()
+        rows = [row for row in rows if row["file_id"] not in blocked_file_ids]
         if len(rows) == 1:
             return rows[0]["id"]
 
     # 4. globally unique name (last resort heuristic)
     rows = store.conn.execute(
-        "SELECT id FROM symbols WHERE name = ? LIMIT 2", (name,)
+        "SELECT id, file_id FROM symbols WHERE name = ? LIMIT 2", (name,)
     ).fetchall()
+    if any(row["file_id"] in blocked_file_ids for row in rows):
+        return None
     if len(rows) == 1:
         return rows[0]["id"]
     return None
@@ -265,6 +274,7 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
     the full-graph behavior for callers that explicitly request it; an
     iterable scopes work to the changed files and invalidated incoming edges.
     """
+    previous_imported_files = {}
     with store.transaction():
         if file_ids is None:
             import_rows = store.conn.execute(
@@ -342,11 +352,22 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
             else:
                 call_rows = []
 
+            if recheck_all_imports:
+                previous_imported_files = {
+                    file_id: _imported_files(store, file_id)
+                    for file_id in {row["file_id"] for row in call_rows}
+                }
+
         for row in import_rows:
             target = resolve_module(store, row["file_id"], row["module"])
             store.conn.execute(
                 "UPDATE imports SET target_id = ? WHERE id = ?", (target, row["id"])
             )
+
+        blocked_import_files = {
+            file_id: previous - _imported_files(store, file_id)
+            for file_id, previous in previous_imported_files.items()
+        }
 
         for row in call_rows:
             caller_id = None
@@ -357,7 +378,12 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                     (row["file_id"], row["caller_name"]),
                 ).fetchone()
                 caller_id = sym["id"] if sym else None
-            callee_id = resolve_callee(store, row["file_id"], row["callee"])
+            callee_id = resolve_callee(
+                store,
+                row["file_id"],
+                row["callee"],
+                blocked_file_ids=blocked_import_files.get(row["file_id"], ()),
+            )
             store.conn.execute(
                 "UPDATE calls SET caller_id = ?, callee_id = ? WHERE id = ?",
                 (caller_id, callee_id, row["id"]),
