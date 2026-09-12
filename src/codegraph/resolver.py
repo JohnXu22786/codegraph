@@ -1710,6 +1710,7 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
     the full-graph behavior for callers that explicitly request it; an
     iterable scopes work to the changed files and invalidated incoming edges.
     """
+    previous_imported_files = {}
     with store.transaction():
         if file_ids is None:
             import_rows = store.conn.execute(
