@@ -28,6 +28,13 @@ _EXT_BY_LANG = {
 _ALL_EXTS = sorted({ext for exts in _EXT_BY_LANG.values() for ext in exts})
 
 _IDENT_CHAIN = re.compile(r"[A-Za-z_$][\w$]*(?:::[A-Za-z_$][\w$]*)*(?:\.[A-Za-z_$][\w$]*)*")
+_SQLITE_PARAM_CHUNK_SIZE = 900
+
+
+def _id_chunks(ids):
+    ids = tuple(ids)
+    for start in range(0, len(ids), _SQLITE_PARAM_CHUNK_SIZE):
+        yield ids[start:start + _SQLITE_PARAM_CHUNK_SIZE]
 
 
 def last_segment(name: str) -> str:
@@ -271,19 +278,20 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
             import_ids = set(import_ids)
             call_ids = set(call_ids)
             if file_ids:
-                placeholders = ", ".join("?" for _ in file_ids)
-                import_ids.update(
-                    row["id"] for row in store.conn.execute(
-                        f"SELECT id FROM imports WHERE file_id IN ({placeholders})",
-                        tuple(file_ids),
+                for chunk in _id_chunks(file_ids):
+                    placeholders = ", ".join("?" for _ in chunk)
+                    import_ids.update(
+                        row["id"] for row in store.conn.execute(
+                            f"SELECT id FROM imports WHERE file_id IN ({placeholders})",
+                            chunk,
+                        )
                     )
-                )
-                call_ids.update(
-                    row["id"] for row in store.conn.execute(
-                        f"SELECT id FROM calls WHERE file_id IN ({placeholders})",
-                        tuple(file_ids),
+                    call_ids.update(
+                        row["id"] for row in store.conn.execute(
+                            f"SELECT id FROM calls WHERE file_id IN ({placeholders})",
+                            chunk,
+                        )
                     )
-                )
             if recheck_all_imports:
                 # A new file can be a higher-priority candidate for an import
                 # that already has a target, so retry resolved imports too.
@@ -301,21 +309,26 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                     if last_segment(row["callee"]) in names
                 )
             if import_ids:
-                placeholders = ", ".join("?" for _ in import_ids)
-                import_rows = store.conn.execute(
-                    f"SELECT id, file_id, module FROM imports WHERE id IN ({placeholders}) "
-                    "ORDER BY id",
-                    tuple(import_ids),
-                ).fetchall()
+                import_rows = []
+                for chunk in _id_chunks(import_ids):
+                    placeholders = ", ".join("?" for _ in chunk)
+                    import_rows.extend(store.conn.execute(
+                        f"SELECT id, file_id, module FROM imports WHERE id IN ({placeholders})",
+                        chunk,
+                    ).fetchall())
+                import_rows.sort(key=lambda row: row["id"])
             else:
                 import_rows = []
             if call_ids:
-                placeholders = ", ".join("?" for _ in call_ids)
-                call_rows = store.conn.execute(
-                    f"SELECT id, file_id, caller_name, callee FROM calls "
-                    f"WHERE id IN ({placeholders}) ORDER BY id",
-                    tuple(call_ids),
-                ).fetchall()
+                call_rows = []
+                for chunk in _id_chunks(call_ids):
+                    placeholders = ", ".join("?" for _ in chunk)
+                    call_rows.extend(store.conn.execute(
+                        f"SELECT id, file_id, caller_name, callee FROM calls "
+                        f"WHERE id IN ({placeholders})",
+                        chunk,
+                    ).fetchall())
+                call_rows.sort(key=lambda row: row["id"])
             else:
                 call_rows = []
 

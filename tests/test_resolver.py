@@ -1,6 +1,7 @@
 """Tests for symbol/module resolution (resolver)."""
 
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -178,6 +179,27 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(self.store.find_call(callee="create_cart")["callee_id"])
         self.assertIn("BEGIN IMMEDIATE", statements)
         self.assertEqual(statements.count("COMMIT"), 1)
+
+    def test_scoped_resolution_chunks_large_id_sets(self):
+        """Large scoped ID sets must not exceed SQLite's bind limit."""
+        if not hasattr(self.store.conn, "setlimit"):
+            self.skipTest("sqlite3.Connection.setlimit is unavailable")
+
+        limit = sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER
+        previous_limit = self.store.conn.setlimit(limit, 999)
+        try:
+            large_ids = set(range(1, 1025))
+            resolve_all(
+                self.store,
+                file_ids=large_ids,
+                call_ids=large_ids,
+                import_ids=large_ids,
+            )
+        finally:
+            self.store.conn.setlimit(limit, previous_limit)
+
+        self.assertIsNotNone(self.store.find_call(callee="create_cart")["callee_id"])
+        self.assertIsNotNone(self.store.find_import(module="pkg.cart")["target_id"])
 
 
 if __name__ == "__main__":
