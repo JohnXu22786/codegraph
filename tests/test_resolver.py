@@ -146,6 +146,84 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_python_relative_import_cannot_escape_package_depth(self):
+        """An over-deep relative import must not resolve a root-level module."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg" / "sub"
+            pkg.mkdir(parents=True)
+            (root / "x.py").write_text(
+                "value = 1\n", encoding="utf-8")
+            (root / "y.py").write_text(
+                "def foo():\n    return 1\n", encoding="utf-8")
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (root / "pkg" / "other.py").write_text(
+                "def foo():\n    return 1\n", encoding="utf-8")
+            (pkg / "module.py").write_text(
+                "from ...x import y\n\n"
+                "def call():\n    return y.foo()\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("pkg/sub/module.py")["id"]
+                self.assertIsNone(resolve_module(store, fid, "...x"))
+                self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+                self.assertIsNone(resolve_callee(store, fid, "y.foo"))
+            finally:
+                store.close()
+
+    def test_dot_only_relative_import_beyond_package_depth_does_not_abort_indexing(self):
+        """An over-deep dot-only import must stay unresolved during indexing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "module.py").write_text(
+                "from .. import value\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("pkg/module.py")["id"]
+                self.assertIsNone(resolve_module(store, fid, ".."))
+                self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+            finally:
+                store.close()
+
+    def test_root_package_relative_import_resolves_from_module(self):
+        """A root package contributes one level to relative-import depth."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "__init__.py").write_text("", encoding="utf-8")
+            (root / "sibling.py").write_text(
+                "def value():\n    return 1\n", encoding="utf-8")
+            (root / "decoy.py").write_text(
+                "def value():\n    return 1\n", encoding="utf-8")
+            (root / "module.py").write_text(
+                "from . import sibling\n\n"
+                "def call():\n    return sibling.value()\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("module.py")["id"]
+                self.assertEqual(
+                    resolve_module(store, fid, "."),
+                    store.file_by_path("__init__.py")["id"],
+                )
+                sid = resolve_callee(store, fid, "sibling.value")
+                self.assertIsNotNone(sid)
+                self.assertEqual(store.symbol_by_id(sid).qualname, "sibling.value")
+                self.assertIsNone(resolve_module(store, fid, "..sibling"))
+            finally:
+                store.close()
+
     def test_unresolved_external(self):
         self.assertIsNone(self._callee("main.go", "fmt.Println"))
         self.assertIsNone(self._callee("pkg/cart.py", "os.getcwd"))

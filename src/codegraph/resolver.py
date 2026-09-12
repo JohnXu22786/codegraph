@@ -113,6 +113,7 @@ def _imported_files(store: IndexStore, file_id: int):
     file = store.file_by_id(file_id)
     if file is None:
         return set()
+    root_is_package = store.file_by_path("__init__.py") is not None
     out = set()
     for imp in store.imports_for_file(file_id):
         if imp["target_id"]:
@@ -129,6 +130,11 @@ def _imported_files(store: IndexStore, file_id: int):
                     base_parts = mod_parts
                 else:
                     base_parts = mod_parts[:-1]
+                package_depth = len(base_parts)
+                if root_is_package and file["path"] != "__init__.py":
+                    package_depth += 1
+                if level > package_depth:
+                    continue
                 for _ in range(level - 1):
                     if base_parts:
                         base_parts = base_parts[:-1]
@@ -195,13 +201,20 @@ def resolve_module(store: IndexStore, file_id: int, module_text: str):
     if lang == "python":
         if module_text.startswith("."):
             level = len(module_text) - len(module_text.lstrip("."))
+            root_is_package = store.file_by_path("__init__.py") is not None
+            package_depth = len(file_dir.parts) + int(root_is_package)
+            if level > package_depth:
+                return None
             rel_name = module_text.lstrip(".")
             base = file_dir
             for _ in range(level - 1):
                 base = base.parent
             parts = rel_name.split(".") if rel_name else []
-            cands = [base.joinpath(*parts).with_suffix(".py")]
-            cands.append(base.joinpath(*parts) / "__init__.py")
+            if not parts and not base.parts:
+                cands = [base / "__init__.py"]
+            else:
+                cands = [base.joinpath(*parts).with_suffix(".py")]
+                cands.append(base.joinpath(*parts) / "__init__.py")
         else:
             parts = module_text.split(".")
             cands = []
