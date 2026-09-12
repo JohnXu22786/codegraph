@@ -102,10 +102,7 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str):
     # 4. globally unique name (last resort heuristic)
     if file["lang"] == "python":
         head = callee_text.replace("::", ".").split(".", 1)[0]
-        if any(
-                imp["kind"] == "from" and imp["target_id"] is None and
-                head in _names_of(imp)
-                for imp in store.imports_for_file(file_id)):
+        if _has_unresolved_python_import_binding(store, file_id, head):
             return None
     rows = store.conn.execute(
         "SELECT id FROM symbols WHERE name = ? LIMIT 2", (name,)
@@ -164,6 +161,20 @@ def _names_of(imp) -> list:
         return json.loads(imp["names"] or "[]")
     except (ValueError, TypeError):
         return []
+
+
+def _has_unresolved_python_import_binding(store, file_id, name: str) -> bool:
+    """Whether an unresolved ``from`` import may provide ``name``."""
+    for imp in store.imports_for_file(file_id):
+        if imp["kind"] != "from" or imp["target_id"] is not None:
+            continue
+        for imported in _names_of(imp):
+            if imported == "*":
+                return True
+            bound = re.split(r"\s+as\s+", imported, maxsplit=1)[-1].strip()
+            if bound == name:
+                return True
+    return False
 
 
 def resolve_module(store: IndexStore, file_id: int, module_text: str):
