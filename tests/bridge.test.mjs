@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -40,6 +41,16 @@ test('module exports the canonical plugin entry', () => {
   assert.equal(plugin.name, 'codegraph')
   assert.deepEqual(plugin.inject, ['tools'])
   assert.equal(typeof plugin.apply, 'function')
+})
+
+test('npm package includes the bundled Python source', () => {
+  const pack = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    cwd: PLUGIN_DIR,
+    encoding: 'utf8',
+  }))
+  const files = pack[0]?.files?.map(({ path }) => path) ?? []
+
+  assert.ok(files.includes('src/codegraph/__main__.py'))
 })
 
 test('apply registers exactly the eight documented tools', async () => {
