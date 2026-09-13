@@ -797,6 +797,36 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_multiline_path_attribute_resolves_custom_module_file(self):
+        """A multiline path attribute changes the file selected by mod."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            (src / "alt").mkdir(parents=True)
+            src.joinpath("lib.rs").write_text(
+                "#[path = \"alt/child.rs\"\n"
+                "]\n"
+                "mod child;\n",
+                encoding="utf-8",
+            )
+            src.joinpath("child.rs").write_text(
+                "fn default_child_fn() {}\n", encoding="utf-8")
+            src.joinpath("alt", "child.rs").write_text(
+                "fn custom_child_fn() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="child")
+                self.assertEqual(
+                    store.file_by_id(row["target_id"])["path"],
+                    "src/alt/child.rs",
+                )
+            finally:
+                store.close()
+
     def test_rust_edition_2021_bare_use_prefers_current_module(self):
         """Rust 2018+ resolves a bare use path from the current module."""
         with tempfile.TemporaryDirectory() as tmp:

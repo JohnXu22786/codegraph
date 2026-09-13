@@ -251,6 +251,12 @@ def _rust_mod_path_overrides(store: IndexStore, file):
         return cache[file_id]
 
     text = _rust_mask_comments(text, preserve_path_strings=True)
+    text = re.sub(
+        r'#\[\s*path\s*=\s*"((?:\\.|[^"\\])*)"\s*\]',
+        lambda match: f'#[path = "{match.group(1)}"]',
+        text,
+        flags=re.DOTALL,
+    )
     pending_path = None
     paths = {}
     for line in text.splitlines():
