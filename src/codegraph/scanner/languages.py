@@ -26,19 +26,67 @@ _PKG_STMT = re.compile(
     r"^[ \t]*package[ \t]+([\w.]+)[ \t]*;?",
     re.MULTILINE,
 )
-_COMMENTS = re.compile(r"//[^\r\n]*|/\*.*?\*/", re.DOTALL)
+
+
+def _mask_non_code(text):
+    """Blank comments and literals while preserving source line breaks."""
+    masked = list(text)
+    length = len(text)
+
+    def blank(start, end):
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    index = 0
+    while index < length:
+        if text.startswith("//", index):
+            end = index + 2
+            while end < length and text[end] not in "\r\n":
+                end += 1
+            blank(index, end)
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = length if end < 0 else end + 2
+            blank(index, end)
+            index = end
+            continue
+
+        quote = None
+        if text.startswith('"""', index):
+            quote = '"""'
+            end = text.find(quote, index + len(quote))
+            end = length if end < 0 else end + len(quote)
+        elif text[index] in ('"', "'", "`"):
+            quote = text[index]
+            end = index + 1
+            while end < length:
+                if quote != "`" and text[end] == "\\":
+                    end += 2
+                elif text[end] == quote:
+                    end += 1
+                    break
+                else:
+                    end += 1
+        if quote is not None:
+            blank(index, end)
+            index = end
+            continue
+        index += 1
+
+    return "".join(masked)
 
 
 def _package_name(text):
-    """Return a Go/Java package declaration, ignoring leading comments."""
+    """Return a Go/Java package declaration outside comments and literals."""
     if not text:
         return None
-    # Keep line breaks intact so the multiline package anchor still works.
-    source = _COMMENTS.sub(
-        lambda m: "".join("\n" if c == "\n" else "\r" if c == "\r" else " "
-                           for c in m.group(0)),
-        text,
-    )
+    # Python's multiline anchor only recognizes ``\n`` as a line boundary.
+    # Normalize CR-only and CRLF source before masking comments and literals.
+    source = text.replace("\r\n", "\n").replace("\r", "\n")
+    source = _mask_non_code(source)
     match = _PKG_STMT.search(source)
     return match.group(1) if match else None
 

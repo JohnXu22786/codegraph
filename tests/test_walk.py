@@ -57,6 +57,25 @@ class LanguageRegistryTest(unittest.TestCase):
             "com.example.real",
         )
 
+    def test_package_lookup_handles_cr_only_line_endings(self):
+        java = "// license\rpackage com.example.service;\r"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
+    def test_package_text_inside_java_text_block_is_ignored(self):
+        java = (
+            "class Example {\n"
+            '    String text = """\n'
+            "            package bogus;\n"
+            '            """;\n'
+            "}\n"
+        )
+        self.assertEqual(
+            languages.module_of("Example.java", "java", java), "Example"
+        )
+
 
 class WalkTest(unittest.TestCase):
     def test_default_discovery(self):
