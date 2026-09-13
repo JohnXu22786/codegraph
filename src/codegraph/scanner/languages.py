@@ -23,7 +23,9 @@ EXTENSIONS = {
 }
 
 _PKG_STMT = re.compile(
-    r"^[ \t]*package[ \t]+([\w.]+)[ \t]*;?",
+    r"^[ \t]*package[ \t\n\f]+"
+    r"(?P<name>[\w$]+(?:[ \t\n\f]*\.[ \t\n\f]*[\w$]+)*)"
+    r"[ \t\f]*(?:;[ \t\f]*|(?=\n|$))",
     re.MULTILINE,
 )
 
@@ -57,14 +59,26 @@ def _mask_non_code(text):
         quote = None
         if text.startswith('"""', index):
             quote = '"""'
-            end = text.find(quote, index + len(quote))
-            end = length if end < 0 else end + len(quote)
+            end = index + len(quote)
+            escaped = False
+            while end < length:
+                if escaped:
+                    escaped = False
+                    end += 1
+                elif text[end] == "\\":
+                    escaped = True
+                    end += 1
+                elif text.startswith(quote, end):
+                    end += len(quote)
+                    break
+                else:
+                    end += 1
         elif text[index] in ('"', "'", "`"):
             quote = text[index]
             end = index + 1
             while end < length:
                 if quote != "`" and text[end] == "\\":
-                    end += 2
+                    end = min(length, end + 2)
                 elif text[end] == quote:
                     end += 1
                     break
@@ -88,7 +102,9 @@ def _package_name(text):
     source = text.replace("\r\n", "\n").replace("\r", "\n")
     source = _mask_non_code(source)
     match = _PKG_STMT.search(source)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    return re.sub(r"[ \t\n\f]*\.[ \t\n\f]*", ".", match.group("name"))
 
 
 def lang_for(rel_path, overrides=None) -> "str | None":

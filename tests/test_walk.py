@@ -76,6 +76,28 @@ class LanguageRegistryTest(unittest.TestCase):
             languages.module_of("Example.java", "java", java), "Example"
         )
 
+    def test_package_tokens_allow_newlines_and_comments(self):
+        go = "package\nmain\n"
+        self.assertEqual(languages.module_of("cmd/main.go", "go", go), "main")
+
+        java = "package com /* comment */ .\n example;\n"
+        self.assertEqual(
+            languages.module_of("Example.java", "java", java), "com.example"
+        )
+
+    def test_escaped_java_text_block_delimiter_stays_inside_literal(self):
+        java = (
+            "class Example {\n"
+            '    String text = """\n'
+            '            \\\"\"\"\n'
+            "            package bogus;\n"
+            '            """;\n'
+            "}\n"
+        )
+        self.assertEqual(
+            languages.module_of("Example.java", "java", java), "Example"
+        )
+
 
 class WalkTest(unittest.TestCase):
     def test_default_discovery(self):

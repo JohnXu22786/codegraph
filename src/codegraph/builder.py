@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .config import ProjectConfig
 from .resolver import resolve_all
-from .scanner import deep, languages, scan_text
+from .scanner import SCAN_VERSION, deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
@@ -49,7 +49,7 @@ def _scan_config(cfg: ProjectConfig) -> str:
         }
     return json.dumps(
         {"engine": cfg.engine, "language_map": cfg.language_map,
-         "providers": providers},
+         "providers": providers, "scanner_version": SCAN_VERSION},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -92,7 +92,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         previous_scan_config = {}
     scan_settings_changed = (
         previous_scan_config.get("engine") != current_scan_config["engine"] or
-        previous_scan_config.get("language_map") != current_scan_config["language_map"]
+        previous_scan_config.get("language_map") != current_scan_config["language_map"] or
+        previous_scan_config.get("scanner_version") !=
+        current_scan_config["scanner_version"]
     )
     previous_providers = previous_scan_config.get("providers", {})
     if not isinstance(previous_providers, dict):
