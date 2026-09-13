@@ -271,6 +271,35 @@ class QueryTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_impact_limit_ignores_cyclic_duplicates(self):
+        """A repeated caller must not consume a later-hop result slot."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "x.py").write_text(
+                "def target():\n"
+                "    pass\n"
+                "def cycle():\n"
+                "    target()\n"
+                "    cycle()\n"
+                "def other():\n"
+                "    target()\n"
+                "def new():\n"
+                "    cycle()\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_impact(store, "x.target", depth=2, limit=3)
+                self.assertEqual(
+                    {(r["qualname"], r["depth"]) for r in rows},
+                    {("x.cycle", 1), ("x.other", 1), ("x.new", 2)},
+                )
+            finally:
+                store.close()
+
     def test_search_symbol_and_doc(self):
         hits = query_search(self.store, "discount")
         qualnames = {h["qualname"] for h in hits}

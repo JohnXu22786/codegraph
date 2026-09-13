@@ -182,10 +182,11 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
                f"JOIN files f ON f.id = c.file_id "
                f"WHERE c.callee_id IN ({placeholders})")
         params = list(frontier)
-        if visited:
-            visited_ph = ",".join("?" for _ in visited)
-            sql += f" AND s.id NOT IN ({visited_ph})"
-            params += list(visited)
+        excluded = visited | seen
+        if excluded:
+            excluded_ph = ",".join("?" for _ in excluded)
+            sql += f" AND s.id NOT IN ({excluded_ph})"
+            params += list(excluded)
         sql += " LIMIT ?"
         params.append(remaining)
         rows = store.conn.execute(sql, params)
