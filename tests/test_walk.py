@@ -98,6 +98,20 @@ class LanguageRegistryTest(unittest.TestCase):
             languages.module_of("Example.java", "java", java), "Example"
         )
 
+    def test_java_package_annotations_are_supported(self):
+        java = "@Deprecated package com.example.service;\n"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
+    def test_java_form_feed_before_package_is_whitespace(self):
+        java = "\fpackage com.example.service;\f"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
 
 class WalkTest(unittest.TestCase):
     def test_default_discovery(self):

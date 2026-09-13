@@ -13,7 +13,7 @@ from __future__ import annotations
 from ..models import FileScan
 
 # Increment when scanner output changes so incremental indexes are refreshed.
-SCAN_VERSION = 1
+SCAN_VERSION = 2
 
 from . import deep, languages, quick, walk  # noqa: F401  (re-exported API)
 

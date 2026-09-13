@@ -23,11 +23,12 @@ EXTENSIONS = {
 }
 
 _PKG_STMT = re.compile(
-    r"^[ \t]*package[ \t\n\f]+"
+    r"^[ \t\f]*package[ \t\n\f]+"
     r"(?P<name>[\w$]+(?:[ \t\n\f]*\.[ \t\n\f]*[\w$]+)*)"
     r"[ \t\f]*(?:;[ \t\f]*|(?=\n|$))",
     re.MULTILINE,
 )
+_ANNOTATION_NAME = re.compile(r"[\w$]+")
 
 
 def _mask_non_code(text):
@@ -93,7 +94,59 @@ def _mask_non_code(text):
     return "".join(masked)
 
 
-def _package_name(text):
+def _mask_java_annotations(text):
+    """Blank Java package annotations while preserving source line breaks."""
+    masked = list(text)
+    length = len(text)
+    whitespace = " \t\n\f"
+
+    def blank(start, end):
+        for index in range(start, end):
+            if masked[index] != "\n":
+                masked[index] = " "
+
+    index = 0
+    while index < length:
+        if text[index] != "@":
+            index += 1
+            continue
+
+        name = _ANNOTATION_NAME.match(text, index + 1)
+        if not name:
+            index += 1
+            continue
+        end = name.end()
+        while True:
+            dot = end
+            while dot < length and text[dot] in whitespace:
+                dot += 1
+            if dot >= length or text[dot] != ".":
+                break
+            next_name = _ANNOTATION_NAME.match(text, dot + 1)
+            if not next_name:
+                break
+            end = next_name.end()
+
+        args = end
+        while args < length and text[args] in whitespace:
+            args += 1
+        if args < length and text[args] == "(":
+            depth = 1
+            args += 1
+            while args < length and depth:
+                if text[args] == "(":
+                    depth += 1
+                elif text[args] == ")":
+                    depth -= 1
+                args += 1
+            end = args
+        blank(index, end)
+        index = end
+
+    return "".join(masked)
+
+
+def _package_name(text, lang):
     """Return a Go/Java package declaration outside comments and literals."""
     if not text:
         return None
@@ -101,6 +154,8 @@ def _package_name(text):
     # Normalize CR-only and CRLF source before masking comments and literals.
     source = text.replace("\r\n", "\n").replace("\r", "\n")
     source = _mask_non_code(source)
+    if lang == "java":
+        source = _mask_java_annotations(source)
     match = _PKG_STMT.search(source)
     if not match:
         return None
@@ -126,7 +181,7 @@ def module_of(rel_path, lang, text="") -> str:
     """
     if not rel_path:
         if lang in ("go", "java"):
-            return _package_name(text) or ""
+            return _package_name(text, lang) or ""
         return ""
     rel = Path(rel_path)
     if lang == "python":
@@ -135,7 +190,7 @@ def module_of(rel_path, lang, text="") -> str:
             parts = parts[:-1]
         return ".".join(parts) if parts else ""
     if lang == "go":
-        return _package_name(text) or rel.with_suffix("").as_posix()
+        return _package_name(text, lang) or rel.with_suffix("").as_posix()
     if lang == "java":
-        return _package_name(text) or rel.with_suffix("").as_posix()
+        return _package_name(text, lang) or rel.with_suffix("").as_posix()
     return rel.with_suffix("").as_posix()
