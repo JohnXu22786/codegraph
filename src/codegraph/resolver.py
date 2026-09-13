@@ -421,6 +421,14 @@ def _rust_fallback_cargo_targets(text: str):
                 return
             if value in ("true", "false"):
                 sections[current_section][key] = value == "true"
+        elif current_section == "package" and key == "edition.workspace":
+            if value == "true":
+                sections[current_section]["edition"] = {"workspace": True}
+        elif current_section == "workspace.package" and key == "edition":
+            parsed = string_value(value)
+            if parsed is not None:
+                sections.setdefault("workspace", {}).setdefault(
+                    "package", {})[key] = parsed
         elif current_section == "package" and key == "build":
             if value == "false":
                 sections[current_section][key] = False
@@ -460,6 +468,10 @@ def _rust_fallback_cargo_targets(text: str):
             elif name == "package":
                 section = "package"
                 sections.setdefault(section, {})
+            elif name == "workspace.package":
+                section = name
+                sections.setdefault("workspace", {}).setdefault(
+                    "package", {})
             elif name in ("example", "test", "bench"):
                 section = name
                 if match.group(1):
@@ -469,7 +481,7 @@ def _rust_fallback_cargo_targets(text: str):
             else:
                 section = None
             continue
-        match = re.match(r"([\w-]+)\s*=\s*(.*)$", line)
+        match = re.match(r"([\w.-]+)\s*=\s*(.*)$", line)
         if not match or section is None:
             continue
         key, value = match.groups()
@@ -580,15 +592,27 @@ def _rust_cargo_target_paths(manifest_path: Path, data=None):
     return targets
 
 
-def _rust_cargo_edition(data):
+def _rust_cargo_edition(data, workspace_edition=None):
     """Return a Cargo package edition, defaulting to Rust 2015."""
     package = data.get("package")
     edition = package.get("edition") if isinstance(package, dict) else None
+    if isinstance(edition, dict):
+        edition = (workspace_edition
+                   if edition.get("workspace") is True else None)
     try:
         edition = int(edition)
     except (TypeError, ValueError):
         edition = 2015
     return edition if edition >= 2015 else 2015
+
+
+def _rust_cargo_workspace_edition(data):
+    """Return a workspace's inherited package edition, if declared."""
+    workspace = data.get("workspace")
+    package = workspace.get("package") if isinstance(workspace, dict) else None
+    if not isinstance(package, dict) or "edition" not in package:
+        return None
+    return _rust_cargo_edition({"package": package})
 
 
 def _rust_declares_module(store: IndexStore, path: Path, rust_paths):
@@ -683,12 +707,31 @@ def _rust_all_root_paths(store: IndexStore):
             except OSError:
                 manifests = []
     store._rust_cargo_manifests = bool(manifests)
+    manifest_data = {}
+    workspace_editions = {}
     for manifest in manifests:
         data = _rust_cargo_manifest_data(manifest)
+        manifest_data[manifest] = data
+        workspace_edition = _rust_cargo_workspace_edition(data)
+        if workspace_edition is not None:
+            workspace_editions[manifest] = workspace_edition
+
+    def inherited_workspace_edition(manifest):
+        directory = manifest.parent
+        while True:
+            edition = workspace_editions.get(directory / "Cargo.toml")
+            if edition is not None:
+                return edition
+            if directory == project_root:
+                return None
+            directory = directory.parent
+
+    for manifest, data in manifest_data.items():
         for path in _rust_cargo_target_paths(manifest, data):
             root_path = add(path)
             if root_path is not None:
-                editions[root_path] = _rust_cargo_edition(data)
+                editions[root_path] = _rust_cargo_edition(
+                    data, inherited_workspace_edition(manifest))
 
     if not manifests:
         # In source trees without Cargo metadata, only root-level markers and

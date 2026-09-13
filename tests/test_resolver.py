@@ -1,5 +1,6 @@
 """Tests for symbol/module resolution (resolver)."""
 
+import json
 import shutil
 import sqlite3
 import tempfile
@@ -845,6 +846,74 @@ class ResolverTest(unittest.TestCase):
                 )
             finally:
                 store.close()
+
+    def test_rust_workspace_edition_resolves_bare_use_from_current_module(self):
+        """A member inherits its workspace edition for bare ``use`` paths."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            member = root / "member"
+            src = member / "src"
+            (src / "child").mkdir(parents=True)
+            root.joinpath("Cargo.toml").write_text(
+                "[workspace]\nmembers = [\"member\"]\n\n"
+                "[workspace.package]\nedition = \"2021\"\n",
+                encoding="utf-8",
+            )
+            member.joinpath("Cargo.toml").write_text(
+                "[package]\nname = \"member\"\nversion = \"0.1.0\"\n"
+                "edition.workspace = true\n",
+                encoding="utf-8",
+            )
+            src.joinpath("lib.rs").write_text(
+                "mod child;\nmod inner;\n", encoding="utf-8")
+            src.joinpath("child.rs").write_text(
+                "mod inner;\nuse inner::foo;\nfn call() { foo(); }\n",
+                encoding="utf-8",
+            )
+            src.joinpath("inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+            src.joinpath("child", "inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+
+            def assert_target():
+                store = IndexStore(str(cfg.db_path))
+                try:
+                    target = store.find_import(module="inner::foo")
+                    self.assertEqual(
+                        store.file_by_id(target["target_id"])["path"],
+                        "member/src/child/inner.rs",
+                    )
+                finally:
+                    store.close()
+
+            build_index(cfg)
+            assert_target()
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                target = store.find_import(module="inner::foo")
+                stale_target = store.file_by_path("member/src/inner.rs")
+                store.conn.execute(
+                    "UPDATE imports SET target_id = ? WHERE id = ?",
+                    (stale_target["id"], target["id"]),
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config["resolver_version"] = 3
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 0)
+            assert_target()
+
+            with patch("codegraph.resolver.tomllib", None):
+                build_index(cfg, force=True)
+                assert_target()
 
     def test_rust_2015_bare_use_does_not_fallback_to_current_module(self):
         """Rust 2015 bare use paths stay crate-relative without a root."""
