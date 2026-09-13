@@ -275,6 +275,55 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_resolver_version_bump_rechecks_ambiguous_qualified_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Caller.java").write_text(
+                "package app;\n\n"
+                "class C {\n"
+                "    static void f() {}\n"
+                "    static void f(int value) {}\n"
+                "}\n\n"
+                "class Caller {\n"
+                "    void invoke() {\n"
+                "        C.f();\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("Caller.java")["id"]
+                call = store.find_call(callee="C.f", file_id=file_id)
+                self.assertIsNotNone(call)
+                stale_id = store.symbol_by_qualname("app.C.f")["id"]
+                store.conn.execute(
+                    "UPDATE calls SET callee_id = ? WHERE id = ?",
+                    (stale_id, call["id"]),
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config["resolver_version"] = 4
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 0)
+            self.assertEqual(report.files_skipped, 1)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="C.f", file_id=file_id)
+                self.assertIsNone(call["callee_id"])
+            finally:
+                store.close()
+
     def test_changed_file_reparsed_only(self):
         build_index(self._cfg())
         target = self.root / "pkg" / "pricing.py"

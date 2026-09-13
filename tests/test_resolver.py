@@ -110,6 +110,35 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_ambiguous_local_qualified_methods_remain_unresolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Caller.java").write_text(
+                "package app;\n\n"
+                "class C {\n"
+                "    static void f() {}\n"
+                "    static void f(int value) {}\n"
+                "}\n\n"
+                "class Caller {\n"
+                "    void invoke() {\n"
+                "        C.f();\n"
+                "    }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("Caller.java")["id"]
+                call = store.find_call(callee="C.f", file_id=file_id)
+                self.assertIsNotNone(call)
+                self.assertIsNone(call["callee_id"])
+            finally:
+                store.close()
+
     def test_module_qualified_call_ignores_nested_owner_outside_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

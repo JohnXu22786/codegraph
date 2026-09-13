@@ -61,6 +61,17 @@ def last_segment(name: str) -> str:
     return name
 
 
+def _unique_local_symbol_id(store: IndexStore, file_id: int, qualname: str):
+    """Return a local symbol id only when its qualified name is unique."""
+    rows = store.conn.execute(
+        "SELECT id FROM symbols WHERE file_id = ? AND qualname = ?",
+        (file_id, qualname),
+    ).fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"]
+    return None
+
+
 def _local_qualified_symbol(store: IndexStore, file_id: int,
                             qualified: str, name: str, caller_name=None):
     """Resolve a qualified target in the caller's lexical scopes."""
@@ -98,29 +109,17 @@ def _local_qualified_symbol(store: IndexStore, file_id: int,
         if owner is None or owner["kind"] not in (
                 "class", "interface", "type"):
             return None
-        row = store.conn.execute(
-            "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
-            "ORDER BY id LIMIT 1",
-            (file_id, f"{scope}.{name}"),
-        ).fetchone()
-        return row["id"] if row else None
+        return _unique_local_symbol_id(store, file_id, f"{scope}.{name}")
 
-    row = store.conn.execute(
-        "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
-        "ORDER BY id LIMIT 1",
-        (file_id, qualified),
-    ).fetchone()
-    if row:
-        return row["id"]
+    local_id = _unique_local_symbol_id(store, file_id, qualified)
+    if local_id is not None:
+        return local_id
 
     while scope:
-        row = store.conn.execute(
-            "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
-            "ORDER BY id LIMIT 1",
-            (file_id, f"{scope}.{qualified}"),
-        ).fetchone()
-        if row:
-            return row["id"]
+        local_id = _unique_local_symbol_id(
+            store, file_id, f"{scope}.{qualified}")
+        if local_id is not None:
+            return local_id
         if scope == module or "." not in scope:
             break
         scope = scope.rsplit(".", 1)[0]
@@ -148,12 +147,12 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     blocked_file_ids = set(blocked_file_ids)
 
     # 1. same file: exact qualname, local qualified owner, then unique bare name
-    row = store.conn.execute(
-        "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? ORDER BY id LIMIT 1",
+    rows = store.conn.execute(
+        "SELECT id FROM symbols WHERE file_id = ? AND qualname = ?",
         (file_id, callee_text),
-    ).fetchone()
-    if row:
-        return row["id"]
+    ).fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"]
     if callee_text == name:
         rows = store.conn.execute(
             "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
