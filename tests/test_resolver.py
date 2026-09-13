@@ -1050,6 +1050,31 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNone(self._callee("pkg/cart.py", "os.getcwd"))
         self.assertIsNone(self._callee("pkg/pricing.py", "PRICES.get"))
 
+    def test_unresolved_from_import_blocks_global_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                "from missing import target\n\n"
+                "def invoke():\n"
+                "    return target()\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.py")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "target"))
+            finally:
+                store.close()
+
     def test_module_resolution(self):
         fid = self._file_id("app.py")
         self.assertEqual(

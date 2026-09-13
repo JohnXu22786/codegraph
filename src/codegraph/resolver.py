@@ -127,6 +127,15 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
             return rows[0]["id"]
 
     # 4. globally unique name (last resort heuristic)
+    unresolved_import_names = {
+        re.split(r"\s+as\s+", imported_name, maxsplit=1)[-1].strip()
+        for imp in store.imports_for_file(file_id)
+        if imp["target_id"] is None
+        for imported_name in _names_of(imp)
+        if isinstance(imported_name, str) and imported_name.strip()
+    }
+    if name in unresolved_import_names:
+        return None
     rows = store.conn.execute(
         "SELECT id, file_id FROM symbols WHERE name = ? LIMIT 2", (name,)
     ).fetchall()
