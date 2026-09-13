@@ -1,5 +1,6 @@
 """Tests for symbol/module resolution (resolver)."""
 
+import json
 import shutil
 import sqlite3
 import tempfile
@@ -890,6 +891,26 @@ class ResolverTest(unittest.TestCase):
 
             build_index(cfg)
             assert_target()
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                target = store.find_import(module="inner::foo")
+                stale_target = store.file_by_path("member/src/inner.rs")
+                store.conn.execute(
+                    "UPDATE imports SET target_id = ? WHERE id = ?",
+                    (stale_target["id"], target["id"]),
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config["resolver_version"] = 3
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 0)
+            assert_target()
+
             with patch("codegraph.resolver.tomllib", None):
                 build_index(cfg, force=True)
                 assert_target()
