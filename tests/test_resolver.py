@@ -144,6 +144,80 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(oid)
         self.assertEqual(self.store.symbol_by_id(oid).qualname, "rustx/lib.Point.origin")
 
+    def test_rust_internal_import_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            (src / "child").mkdir(parents=True)
+            (src / "lib.rs").write_text(
+                "mod child;\n"
+                "mod shared;\n"
+                "use crate::shared::shared_fn;\n"
+                "use self::child::child_fn;\n"
+                "use crate::root_fn;\n"
+                "fn root_fn() {}\n"
+                "fn call() { shared_fn(); child_fn(); root_fn(); }\n",
+                encoding="utf-8",
+            )
+            (src / "child.rs").write_text(
+                "mod nested;\n"
+                "use super::shared::shared_fn;\n"
+                "use self::nested::nested_fn;\n"
+                "fn child_fn() { shared_fn(); nested_fn(); }\n",
+                encoding="utf-8",
+            )
+            (src / "shared.rs").write_text(
+                "pub fn shared_fn() {}\n", encoding="utf-8")
+            (src / "child" / "nested.rs").write_text(
+                "pub fn nested_fn() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                lib_id = store.file_by_path("src/lib.rs")["id"]
+                child_id = store.file_by_path("src/child.rs")["id"]
+                imports = {
+                    (store.file_by_id(row["file_id"])["path"], row["module"]):
+                    store.file_by_id(row["target_id"])["path"]
+                    for row in store.conn.execute(
+                        "SELECT file_id, module, target_id FROM imports "
+                        "WHERE target_id IS NOT NULL"
+                    )
+                }
+                self.assertEqual(
+                    imports[("src/lib.rs", "crate::shared::shared_fn")],
+                    "src/shared.rs",
+                )
+                self.assertEqual(
+                    imports[("src/lib.rs", "self::child::child_fn")],
+                    "src/child.rs",
+                )
+                self.assertEqual(
+                    imports[("src/lib.rs", "crate::root_fn")], "src/lib.rs")
+                self.assertEqual(
+                    imports[("src/child.rs", "super::shared::shared_fn")],
+                    "src/shared.rs",
+                )
+                self.assertEqual(
+                    imports[("src/child.rs", "self::nested::nested_fn")],
+                    "src/child/nested.rs",
+                )
+
+                call = resolve_callee(store, lib_id, "shared_fn")
+                self.assertEqual(
+                    store.symbol_by_id(call)["qualname"],
+                    "src/shared.shared_fn",
+                )
+                call = resolve_callee(store, child_id, "nested_fn")
+                self.assertEqual(
+                    store.symbol_by_id(call)["qualname"],
+                    "src/child/nested.nested_fn",
+                )
+            finally:
+                store.close()
+
     def test_bare_relative_import_resolves_on_first_build(self):
         """from . import x must resolve to pkg/x.py on a fresh index."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -33,6 +33,7 @@ _ALL_EXTS = sorted({ext for exts in _EXT_BY_LANG.values() for ext in exts})
 
 _IDENT_CHAIN = re.compile(r"[A-Za-z_$][\w$]*(?:::[A-Za-z_$][\w$]*)*(?:\.[A-Za-z_$][\w$]*)*")
 _SQLITE_PARAM_CHUNK_SIZE = 900
+_RUST_CRATE_ROOT_FILES = ("lib.rs", "main.rs")
 
 
 def _id_chunks(ids):
@@ -167,6 +168,137 @@ def _names_of(imp) -> list:
         return []
 
 
+def _rust_crate_dir(store: IndexStore, file_path: Path) -> Path:
+    """Return the relative directory containing a Rust crate root.
+
+    Rust's ``crate::`` paths are rooted at the crate source root, not at the
+    directory containing the importing file.  The index does not retain
+    Cargo metadata, so use the nearest indexed ``lib.rs``/``main.rs`` as the
+    crate-root marker and fall back to common source-tree layouts.
+    """
+    file_dir = file_path.parent
+
+    # Cargo binaries in src/bin are independent crate roots even when the
+    # package also has src/lib.rs or src/main.rs.
+    if file_dir.name == "bin" and file_path.name != "mod.rs":
+        return file_dir
+
+    for directory in (file_dir, *file_dir.parents):
+        if any(store.file_by_path((directory / name).as_posix())
+               for name in _RUST_CRATE_ROOT_FILES):
+            return directory
+
+    parts = file_path.parts[:-1]
+    if "src" in parts:
+        # Use the deepest source directory when a workspace contains nested
+        # source trees.
+        src_index = max(index for index, part in enumerate(parts)
+                        if part == "src")
+        return Path(*parts[:src_index + 1])
+    # A project without Cargo's src layout commonly keeps one crate below a
+    # top-level directory (as the test fixture does).
+    return Path(parts[0]) if parts else Path(".")
+
+
+def _rust_module_dir(file_path: Path, crate_dir: Path) -> Path:
+    """Return the directory in which the file's child modules are defined."""
+    if file_path.name == "mod.rs":
+        return file_path.parent
+    if file_path.name in _RUST_CRATE_ROOT_FILES:
+        return file_path.parent
+    if file_path.parent == crate_dir and crate_dir.name == "bin":
+        return file_path.parent
+    return file_path.with_suffix("")
+
+
+def _rust_module_file_candidates(module_dir: Path):
+    """Return the two filesystem forms of a Rust module path."""
+    if module_dir == Path("."):
+        return []
+    return [module_dir.with_suffix(".rs"), module_dir / "mod.rs"]
+
+
+def _rust_root_file_candidates(crate_dir: Path, importing_file: Path):
+    """Return crate-root files, preferring the importing root when known."""
+    names = list(_RUST_CRATE_ROOT_FILES)
+    if importing_file.parent == crate_dir and importing_file.name in names:
+        names.remove(importing_file.name)
+        names.insert(0, importing_file.name)
+    return [crate_dir / name for name in names]
+
+
+def _rust_candidates(store: IndexStore, file: dict, module_text: str,
+                     root: Path):
+    """Build root-relative candidates for a Rust module or use path."""
+    file_path = Path(file["path"])
+    crate_dir = _rust_crate_dir(store, file_path)
+    module_dir = _rust_module_dir(file_path, crate_dir)
+    parts = module_text.split("::")
+    qualifier = parts[0]
+    explicit_relative = qualifier in ("crate", "self", "super")
+
+    if qualifier == "crate":
+        base = crate_dir
+        parts = parts[1:]
+    elif qualifier in ("self", "super"):
+        base = module_dir
+        parts = parts[1:]
+        if qualifier == "super":
+            if base == crate_dir:
+                return []
+            base = base.parent
+        while parts and parts[0] in ("self", "super"):
+            if parts.pop(0) == "super":
+                if base == crate_dir:
+                    return []
+                base = base.parent
+    else:
+        # A non-qualified Rust module path is relative to the current module.
+        # This also fixes ``mod child;`` inside foo.rs (child lives in
+        # foo/child.rs, not beside foo.rs).
+        base = module_dir
+
+    candidates = []
+
+    def add(path):
+        if path not in candidates:
+            candidates.append(path)
+
+    if not parts:
+        if qualifier == "self":
+            add(file_path)
+        elif base == crate_dir:
+            for path in _rust_root_file_candidates(crate_dir, file_path):
+                add(path)
+        else:
+            for path in _rust_module_file_candidates(base):
+                add(path)
+        return candidates
+
+    # The final path component may name either a child module or an item
+    # inside the preceding module.  Try module-file prefixes from longest to
+    # shortest so both ``crate::a::b`` and ``crate::a::function`` work.
+    for end in range(len(parts), 0, -1):
+        module_path = base.joinpath(*parts[:end])
+        for path in _rust_module_file_candidates(module_path):
+            add(path)
+
+    # Qualified paths can also import an item defined directly in their base
+    # module (for example, ``use super::helper``).  An unqualified external
+    # path must not fall back to the current file, or external imports would
+    # become falsely resolved.
+    if explicit_relative:
+        if qualifier == "self" and base == module_dir:
+            add(file_path)
+        elif base == crate_dir:
+            for path in _rust_root_file_candidates(crate_dir, file_path):
+                add(path)
+        else:
+            for path in _rust_module_file_candidates(base):
+                add(path)
+    return candidates
+
+
 def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
     """Return root-relative file paths considered for a module import."""
     file = store.file_by_id(file_id)
@@ -226,13 +358,12 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
                 cands.append(up.joinpath(*parts) / "__init__.py")
         return [rel for cand in cands if (rel := rel_of(cand)) is not None]
 
-    # --- rust: crate/super/std are external, mod items map to files -------
+    # --- rust: std/core/alloc are external; crate/self/super are internal --
     if lang == "rust":
         if module_text in ("std", "core", "alloc") or \
                 module_text.startswith(("std::", "core::", "alloc::")):
             return []
-        base = module_text.split("::")[0]
-        return [rel for cand in (file_dir / f"{base}.rs", file_dir / base / "mod.rs")
+        return [rel for cand in _rust_candidates(store, file, module_text, root)
                 if (rel := rel_of(cand)) is not None]
 
     # --- go / java: try the module text as a path under the root ----------
