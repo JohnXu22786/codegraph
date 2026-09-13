@@ -48,19 +48,16 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(cid)
         self.assertEqual(self.store.symbol_by_id(cid).qualname, "pkg.cart.create_cart")
 
-    def test_absolute_python_import_prefers_project_root(self):
+    def test_absolute_python_import_falls_back_to_source_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "foo.py").write_text(
-                "def target():\n    return 'root'\n", encoding="utf-8")
-            pkg = root / "pkg"
-            pkg.mkdir()
-            (pkg / "__init__.py").write_text("", encoding="utf-8")
-            (pkg / "foo.py").write_text(
-                "def target():\n    return 'package'\n", encoding="utf-8")
-            (pkg / "caller.py").write_text(
-                "import foo\n\n"
-                "def invoke():\n    return foo.target()\n",
+            src = root / "src"
+            src.mkdir()
+            (src / "util.py").write_text(
+                "def target():\n    return 'src'\n", encoding="utf-8")
+            (src / "app.py").write_text(
+                "import util\n\n"
+                "def invoke():\n    return util.target()\n",
                 encoding="utf-8",
             )
 
@@ -69,15 +66,50 @@ class ResolverTest(unittest.TestCase):
             build_index(cfg)
             store = IndexStore(str(cfg.db_path))
             try:
-                fid = store.file_by_path("pkg/caller.py")["id"]
+                fid = store.file_by_path("src/app.py")["id"]
                 self.assertEqual(
-                    resolve_module(store, fid, "foo"),
-                    store.file_by_path("foo.py")["id"],
+                    resolve_module(store, fid, "util"),
+                    store.file_by_path("src/util.py")["id"],
                 )
-                call = store.find_call(callee="foo.target", file_id=fid)
+                call = store.find_call(callee="util.target", file_id=fid)
                 self.assertIsNotNone(call)
                 self.assertEqual(
-                    store.symbol_by_id(call["callee_id"]).qualname, "foo.target"
+                    store.symbol_by_id(call["callee_id"]).file_id,
+                    store.file_by_path("src/util.py")["id"],
+                )
+            finally:
+                store.close()
+
+    def test_absolute_python_import_prefers_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "util.py").write_text(
+                "def target():\n    return 'root'\n", encoding="utf-8")
+            src = root / "src"
+            src.mkdir()
+            (src / "util.py").write_text(
+                "def target():\n    return 'src'\n", encoding="utf-8")
+            (src / "app.py").write_text(
+                "import util\n\n"
+                "def invoke():\n    return util.target()\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("src/app.py")["id"]
+                self.assertEqual(
+                    resolve_module(store, fid, "util"),
+                    store.file_by_path("util.py")["id"],
+                )
+                call = store.find_call(callee="util.target", file_id=fid)
+                self.assertIsNotNone(call)
+                self.assertEqual(
+                    store.symbol_by_id(call["callee_id"]).file_id,
+                    store.file_by_path("util.py")["id"],
                 )
             finally:
                 store.close()
