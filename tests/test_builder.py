@@ -105,7 +105,7 @@ class BuilderTest(unittest.TestCase):
                     (package_id, import_row["id"]),
                 )
                 scan_config = json.loads(store.get_meta("scan_config"))
-                scan_config["resolver_version"] = 1
+                scan_config["resolver_version"] = 4
                 store.set_meta("scan_config", json.dumps(scan_config))
                 store.conn.commit()
             finally:
@@ -149,7 +149,7 @@ class BuilderTest(unittest.TestCase):
                     (import_row["id"],),
                 )
                 scan_config = json.loads(store.get_meta("scan_config"))
-                scan_config["resolver_version"] = 1
+                scan_config["resolver_version"] = 4
                 store.set_meta("scan_config", json.dumps(scan_config))
                 store.conn.commit()
             finally:
