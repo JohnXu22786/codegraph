@@ -143,8 +143,12 @@ def _exec_overview(args, ctx: ToolContext):
 
 def _exec_reindex(args, ctx: ToolContext):
     force = bool(args.get("force", False))
-    report = build_index(ctx.cfg, force=force, quiet=True)
-    ctx.cache.clear()  # stale read results must not outlive a refresh
+    try:
+        report = build_index(ctx.cfg, force=force, quiet=True)
+    finally:
+        # Incremental builds commit changed files as they go, so a later
+        # failure can still leave the index changed and cached reads stale.
+        ctx.cache.clear()
     return {
         "files_scanned": report.files_scanned,
         "files_changed": report.files_changed,

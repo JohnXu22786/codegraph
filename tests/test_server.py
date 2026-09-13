@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from codegraph import __version__
 from codegraph.config import load_config
@@ -169,6 +170,35 @@ class McpServerTest(unittest.TestCase):
         qualnames = [r["qualname"] for r in value]
         self.assertIn("pkg.pricing.vat", qualnames)
         self.assertEqual(len(value), 3)
+
+    def test_reindex_invalidates_query_cache_when_build_fails(self):
+        from codegraph.scanner import scan_text as real_scan_text
+        from codegraph.server.handlers import ToolContext, execute_tool
+
+        ctx = ToolContext(self.cfg)
+        value, _ = execute_tool("callers", {"symbol": "pkg.pricing.price"}, ctx)
+        self.assertEqual(len(value), 2)  # prime the cache
+
+        target = self.root / "pkg" / "pricing.py"
+        target.write_text(
+            target.read_text(encoding="utf-8")
+            + "\ndef vat(x):\n    return price(x)\n",
+            encoding="utf-8",
+        )
+        later = self.root / "z_later.py"
+        later.write_text("value = 1\n", encoding="utf-8")
+
+        def fail_later(text, lang, rel_path, engine):
+            if rel_path == "z_later.py":
+                raise RuntimeError("temporary scan failure")
+            return real_scan_text(text, lang, rel_path, engine)
+
+        with patch("codegraph.builder.scan_text", side_effect=fail_later):
+            with self.assertRaises(RuntimeError):
+                execute_tool("reindex", {}, ctx)
+
+        value, _ = execute_tool("callers", {"symbol": "pkg.pricing.price"}, ctx)
+        self.assertEqual(value, [])
 
     def test_output_has_no_embedded_newlines(self):
         replies = self._run([self._msg(1, "tools/list")])
