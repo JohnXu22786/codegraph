@@ -1007,11 +1007,16 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
     # Go import paths use slashes for directories; dots are valid in a path
     # segment (for example, the domain in ``example.com/acme``).
     parts = module_text.split("/") if lang == "go" else module_text.split(".")
+    target = Path(*parts)
     cands = []
-    for ext in _EXT_BY_LANG[lang]:
-        cands.append(Path(*parts).with_suffix(ext))
     if lang == "go":
-        cands.append(Path(*parts) / "main.go")
+        # Import paths are package stems, so append the extension instead of
+        # replacing a valid dot in the final path segment.
+        cands.extend(target.with_name(target.name + ext)
+                     for ext in _EXT_BY_LANG[lang])
+        cands.append(target / "main.go")
+    else:
+        cands.extend(target.with_suffix(ext) for ext in _EXT_BY_LANG[lang])
     return [rel for cand in cands if (rel := rel_of(cand)) is not None]
 
 

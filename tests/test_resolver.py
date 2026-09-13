@@ -225,6 +225,33 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_go_import_path_with_dotted_final_segment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / "example.com" / "acme"
+            package_dir.mkdir(parents=True)
+            (root / "main.go").write_text(
+                'package main\n\nimport "example.com/acme/foo.bar"\n',
+                encoding="utf-8",
+            )
+            (package_dir / "foo.bar.go").write_text(
+                "package foobar\n\nfunc Add(a, b int) int { return a + b }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("main.go")["id"]
+                self.assertEqual(
+                    resolve_module(store, fid, "example.com/acme/foo.bar"),
+                    store.file_by_path("example.com/acme/foo.bar.go")["id"],
+                )
+            finally:
+                store.close()
+
     def test_java_same_package_class(self):
         jid = self._callee("Runner.java", "Calc.sum")
         self.assertIsNotNone(jid)
