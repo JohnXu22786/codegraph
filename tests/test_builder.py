@@ -76,6 +76,53 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(report.files_skipped, ALL_FILES)
         resolve.assert_called_once()
 
+    def test_resolver_version_change_re_resolves_stale_absolute_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "foo.py").write_text(
+                "def target():\n    return 'root'\n", encoding="utf-8")
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "foo.py").write_text(
+                "def target():\n    return 'package'\n", encoding="utf-8")
+            (pkg / "caller.py").write_text(
+                "import foo\n\n"
+                "def invoke():\n    return foo.target()\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                package_id = store.file_by_path("pkg/foo.py")["id"]
+                import_row = store.find_import(module="foo")
+                store.conn.execute(
+                    "UPDATE imports SET target_id = ? WHERE id = ?",
+                    (package_id, import_row["id"]),
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config["resolver_version"] = 1
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_skipped, 4)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                import_row = store.find_import(module="foo")
+                self.assertEqual(
+                    store.file_by_id(import_row["target_id"])["path"], "foo.py"
+                )
+            finally:
+                store.close()
+
     def test_changed_file_reparsed_only(self):
         build_index(self._cfg())
         target = self.root / "pkg" / "pricing.py"
