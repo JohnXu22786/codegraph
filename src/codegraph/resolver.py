@@ -130,8 +130,14 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     unresolved_import_names, unresolved_import_wildcard = (
         _unresolved_import_bindings(store, file_id)
     )
-    if callee_text == name and (
-            name in unresolved_import_names or unresolved_import_wildcard):
+    root = callee_text.replace("::", ".").split(".", 1)[0]
+    # Go has a long-standing package-qualified global heuristic for imports
+    # whose repository path is unavailable (for example ``proj/helper``).
+    # Keep that qualified fallback while applying root shadowing to the
+    # language imports that carry local member bindings.
+    if ((root in unresolved_import_names and
+         (callee_text == name or file["lang"] != "go")) or
+            (callee_text == name and unresolved_import_wildcard)):
         return None
     rows = store.conn.execute(
         "SELECT id, file_id FROM symbols WHERE name = ? LIMIT 2", (name,)
@@ -154,7 +160,7 @@ def _imported_files(store: IndexStore, file_id: int):
             out.add(imp["target_id"])
         if imp["kind"] == "module":
             continue
-        for nm in _names_of(imp):
+        for nm in _source_names_of(imp, file["lang"]):
             base = imp["module"]
             if file["lang"] == "python" and base.startswith("."):
                 # Python relative imports resolve against the dotted package.
@@ -186,9 +192,46 @@ def _names_of(imp) -> list:
     import json
 
     try:
-        return json.loads(imp["names"] or "[]")
+        names = json.loads(imp["names"] or "[]")
+        return names if isinstance(names, list) else []
     except (ValueError, TypeError):
         return []
+
+
+def _import_name_parts(imp, imported_name, lang):
+    """Return ``(source, local, wildcard)`` for one stored import name."""
+    if not isinstance(imported_name, str):
+        return "", "", False
+    value = imported_name.split("#", 1)[0].strip()
+    if not value:
+        return "", "", False
+    if value == "*":
+        return "*", "", True
+
+    alias = re.match(
+        r"^(.*?)\s+as\s+([A-Za-z_$][\w$]*)$", value)
+    if alias:
+        source = alias.group(1).strip()
+        return source, alias.group(2), False
+
+    # Older quick-scanner records used ``source: local`` for CommonJS
+    # destructuring.  Continue to understand those records as indexes are
+    # often reused across scanner upgrades.
+    if lang in ("javascript", "typescript") and imp["kind"] == "require":
+        alias = re.match(
+            r"^([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)$", value)
+        if alias:
+            return alias.group(1), alias.group(2), False
+    return value, value, False
+
+
+def _source_names_of(imp, lang):
+    """Yield source member names used to discover imported submodules."""
+    for imported_name in _names_of(imp):
+        source, _local, wildcard = _import_name_parts(
+            imp, imported_name, lang)
+        if source and not wildcard and source != "*":
+            yield source
 
 
 def _unresolved_import_bindings(store: IndexStore, file_id: int):
@@ -205,24 +248,20 @@ def _unresolved_import_bindings(store: IndexStore, file_id: int):
             continue
         imported_names = _names_of(imp)
         for imported_name in imported_names:
-            if not isinstance(imported_name, str):
-                continue
-            imported_name = imported_name.split("#", 1)[0].strip()
-            if not imported_name:
-                continue
-            if imported_name == "*":
+            _source, local, imported_wildcard = _import_name_parts(
+                imp, imported_name, lang)
+            if imported_wildcard:
                 wildcard = True
-                continue
-            alias = re.search(r"\s+as\s+([A-Za-z_$][\w$]*)$", imported_name)
-            names.add(alias.group(1) if alias else imported_name)
+            elif local:
+                names.add(local)
 
         if imported_names:
             continue
         module = imp["module"]
         if lang == "python" and imp["kind"] == "module":
-            names.add(last_segment(module))
+            names.add(module.split(".", 1)[0])
         elif lang == "rust" and imp["kind"] == "use":
-            if module.endswith("::*"):
+            if module == "*" or module.endswith("::*"):
                 wildcard = True
             else:
                 names.add(last_segment(module))

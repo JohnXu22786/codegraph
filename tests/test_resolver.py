@@ -1101,6 +1101,117 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_unresolved_import_blocks_qualified_root_but_not_receiver(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                "from missing import target\n\n"
+                "def invoke(obj):\n"
+                "    target.run()\n"
+                "    return obj.target()\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n"
+                "def run():\n"
+                "    return 2\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.py")["id"]
+                target_id = store.symbol_by_qualname("other.target")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "target.run"))
+                self.assertEqual(resolve_callee(store, fid, "obj.target"), target_id)
+            finally:
+                store.close()
+
+    def test_unresolved_dotted_python_import_blocks_bound_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                "import missing.submodule\n\n"
+                "def invoke():\n"
+                "    return missing()\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def missing():\n"
+                "    return 1\n"
+                "def submodule():\n"
+                "    return 2\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.py")["id"]
+                submodule_id = store.symbol_by_qualname("other.submodule")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "missing"))
+                self.assertEqual(resolve_callee(store, fid, "submodule"), submodule_id)
+            finally:
+                store.close()
+
+    def test_unresolved_rust_wildcard_import_blocks_global_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.rs").write_text(
+                "use missing::*;\n"
+                "fn invoke() { target(); }\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.rs")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "target"))
+            finally:
+                store.close()
+
+    def test_unresolved_javascript_aliases_block_only_local_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.js").write_text(
+                "import { target as esm_alias } from \"missing-esm\";\n"
+                "const { target: cjs_alias } = require(\"missing-cjs\");\n"
+                "function invoke() { esm_alias(); cjs_alias(); target(); }\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.js")["id"]
+                target_id = store.symbol_by_qualname("other.target")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "esm_alias"))
+                self.assertIsNone(resolve_callee(store, fid, "cjs_alias"))
+                self.assertEqual(resolve_callee(store, fid, "target"), target_id)
+            finally:
+                store.close()
+
     def test_unresolved_python_import_forms_block_global_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

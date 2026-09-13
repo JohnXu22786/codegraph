@@ -18,6 +18,7 @@ from .quick import (
     _imports_go,
     _imports_java,
     _imports_javascript,
+    _js_require_bindings,
     _imports_python,
     _imports_rust,
     GO_EXCLUDE,
@@ -318,6 +319,17 @@ class _Walker:
         # before the generic exclude (require is in the exclude set)
         if head == "require" and self.lang in ("javascript", "typescript"):
             for imp in _imports_javascript(text):
+                binding = node.parent
+                while binding is not None and binding.type in (
+                        "member_expression", "optional_member_expression",
+                        "subscript_expression"):
+                    binding = binding.parent
+                if binding is not None:
+                    lhs = (binding.child_by_field_name("name")
+                           if binding.type == "variable_declarator" else None)
+                    if lhs is not None:
+                        imp.names = _js_require_bindings(
+                            _node_text(lhs, self.source))
                 imp.line = node.start_point[0] + 1
                 self.imports.append(imp)
             return

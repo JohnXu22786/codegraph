@@ -65,6 +65,13 @@ class DeepPythonTest(unittest.TestCase):
         modules = [(i.module, i.kind) for i in scan.imports]
         self.assertIn(("./util.js", "require"), modules)
 
+    def test_require_aliases_are_preserved_in_deep(self):
+        scan = deep.deep_scan(
+            "const { target: alias } = require('missing');\n",
+            "javascript",
+        )
+        self.assertEqual(scan.imports[0].names, ["target as alias"])
+
     def test_new_expression_recorded_as_call(self):
         text = (PROJ / "web/index.ts").read_text(encoding="utf-8")
         scan = deep.deep_scan(text, "typescript", "web/index.ts")

@@ -171,6 +171,20 @@ class QuickJavascriptTest(unittest.TestCase):
         self.assertEqual(scan.imports[0].kind, "require")
         self.assertIn(("web/app.greet", "fmt"), {(c.caller, c.callee) for c in scan.calls})
 
+    def test_javascript_import_aliases_keep_only_local_bindings(self):
+        src = (
+            "import { target as esm_alias, other } from 'missing-esm';\n"
+            "const { target: cjs_alias, other } = require('missing-cjs');\n"
+        )
+        scan = quick.quick_scan(src, "javascript")
+        self.assertEqual(scan.imports[0].names, ["target as esm_alias", "other"])
+        self.assertEqual(scan.imports[1].names, ["target as cjs_alias", "other"])
+
+    def test_rust_wildcard_import_is_preserved(self):
+        scan = quick.quick_scan("use missing::*;\n", "rust")
+        self.assertEqual(scan.imports[0].module, "missing")
+        self.assertEqual(scan.imports[0].names, ["*"])
+
     def test_arrow_function_and_interface(self):
         src = (
             "import { b } from './x';\n"

@@ -245,7 +245,8 @@ JS_RESERVED_NAMES = {
 RE_JS_ESM = re.compile(
     r"^[ \t]*import\s+(?:([^'\"\n;]+?)\s+from\s+)?['\"]([^'\"]+)['\"]", re.M)
 RE_JS_REQUIRE = re.compile(r"require\(\s*['\"]([^'\"]+)['\"]\s*\)")
-RE_JS_REQ_NAMES = re.compile(r"(?:const|let|var)\s*\{?\s*([^=\n]*?)\s*\}?\s*=\s*require")
+RE_JS_REQ_NAMES = re.compile(
+    r"^[ \t]*(?:const|let|var)\s+(.+?)\s*=\s*require\s*\(", re.M)
 RE_JS_IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 
 
@@ -254,11 +255,156 @@ def _strip_js_comment(line: str) -> str:
     return re.split(r"//", line, maxsplit=1)[0] if "//" in line else line
 
 
+def _strip_js_comments(text: str) -> str:
+    """Remove comments from an import binding clause."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
+def _split_js_top_level(text: str):
+    """Split a JavaScript binding list without splitting nested expressions."""
+    parts = []
+    start = 0
+    depth = 0
+    quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+        elif char in "({[":
+            depth += 1
+        elif char in ")}]":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    parts.append(text[start:].strip())
+    return [part for part in parts if part]
+
+
+def _js_top_level_index(text: str, wanted: str):
+    """Return the first top-level ``wanted`` character in ``text``."""
+    depth = 0
+    quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+        elif char in "({[":
+            depth += 1
+        elif char in ")}]":
+            depth = max(0, depth - 1)
+        elif char == wanted and depth == 0:
+            return index
+    return -1
+
+
+def _js_leading_identifier(text: str):
+    match = RE_JS_IDENT.match(text.strip())
+    return match.group(0) if match else ""
+
+
+def _js_binding_name(source: str, local: str):
+    """Keep source information while making the local binding explicit."""
+    source = source.strip()
+    local = local.strip()
+    if not local:
+        return ""
+    return local if source == local else f"{source} as {local}"
+
+
+def _js_esm_bindings(clause: str):
+    """Return local bindings from an ESM import clause.
+
+    Aliases retain their source name in the same ``source as local`` form
+    used by Python imports, while namespace imports bind only their local
+    namespace identifier.
+    """
+    clause = _strip_js_comments(clause).strip()
+    if clause.startswith("type "):
+        clause = clause[5:].lstrip()
+    names = []
+    for part in _split_js_top_level(clause):
+        if part.startswith("{") and part.endswith("}"):
+            for spec in _split_js_top_level(part[1:-1]):
+                spec = spec.strip()
+                if spec.startswith("type "):
+                    spec = spec[5:].lstrip()
+                alias = re.match(
+                    r"^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$",
+                    spec,
+                )
+                if alias:
+                    names.append(_js_binding_name(alias.group(1), alias.group(2)))
+                else:
+                    local = _js_leading_identifier(spec)
+                    if local:
+                        names.append(local)
+            continue
+        namespace = re.match(
+            r"^\*\s+as\s+([A-Za-z_$][\w$]*)$", part)
+        if namespace:
+            names.append(namespace.group(1))
+            continue
+        local = _js_leading_identifier(part)
+        if local:
+            names.append(local)
+    return names
+
+
+def _js_require_bindings(lhs: str):
+    """Return local bindings from a CommonJS ``require`` assignment."""
+    lhs = _strip_js_comments(lhs).strip()
+    if lhs.startswith("{") and lhs.endswith("}"):
+        names = []
+        for spec in _split_js_top_level(lhs[1:-1]):
+            if spec.startswith("..."):
+                local = _js_leading_identifier(spec[3:])
+                if local:
+                    names.append(local)
+                continue
+            colon = _js_top_level_index(spec, ":")
+            if colon >= 0:
+                source = spec[:colon].strip()
+                local = _js_leading_identifier(spec[colon + 1:].split("=", 1)[0])
+                if local:
+                    names.append(_js_binding_name(source, local))
+                continue
+            local = _js_leading_identifier(spec.split("=", 1)[0])
+            if local:
+                names.append(local)
+        return names
+    if lhs.startswith("[") and lhs.endswith("]"):
+        names = []
+        for spec in _split_js_top_level(lhs[1:-1]):
+            local = _js_leading_identifier(spec.lstrip("."))
+            if local:
+                names.append(local)
+        return names
+    local = _js_leading_identifier(lhs)
+    return [local] if local else []
+
+
 def _imports_javascript(text):
     imports = []
     for m in RE_JS_ESM.finditer(text):
-        clause = m.group(1) or ""
-        names = [x for x in RE_JS_IDENT.findall(clause) if x != "as"]
+        names = _js_esm_bindings(m.group(1) or "")
         imports.append(ImportRec(m.group(2), names, "import", _line_no(text, m.start())))
     # pair each require(...) with the *nearest preceding* binding statement;
     # searching from 0 would mis-bind names in files with several requires
@@ -272,7 +418,7 @@ def _imports_javascript(text):
             else:
                 break
         if stmt is not None:
-            names = [x.strip() for x in stmt.group(1).split(",") if x.strip()]
+            names = _js_require_bindings(stmt.group(1))
         imports.append(ImportRec(m.group(1), names, "require", _line_no(text, m.start())))
     return imports
 
@@ -682,11 +828,12 @@ def _rust_use_tree_bindings(text, prefix=""):
         text = alias_match.group(1).strip()
         alias = alias_match.group(2)
     text = re.sub(r"\s*::\s*", "::", text)
+    wildcard = text == "*" or text.endswith("::*")
     text = re.sub(r"::\*$", "", text)
     if text in ("self", "*"):
-        return [(prefix, alias)] if prefix else []
+        return [(prefix, "*" if wildcard else alias)] if prefix else []
     path = "::".join(part for part in (prefix, text) if part)
-    return [(path, alias)] if path else []
+    return [(path, "*" if wildcard else alias)] if path else []
 
 
 def _rust_use_tree_paths(text, prefix=""):
@@ -705,8 +852,9 @@ def _imports_rust(text):
         expression = expression.strip().rstrip(";").strip()
         seen = set()
         for module, alias in _rust_use_tree_bindings(expression):
-            if module and module not in seen:
-                seen.add(module)
+            key = (module, alias)
+            if module and key not in seen:
+                seen.add(key)
                 imports.append(ImportRec(
                     module, [alias] if alias else [], "use",
                     _line_no(text, m.start())))
