@@ -23,8 +23,12 @@ _EXT_BY_LANG = {
     "rust": [".rs"],
 }
 
-# relative imports may point at any language's file (require("./util.js")
-# can resolve to util.ts), so fall back to the union of all extensions
+# JavaScript / TypeScript relative imports may use either ecosystem's
+# extensions (require("./util.js") can resolve to util.ts), but must not
+# fall through to unrelated languages.
+_JS_TS_EXTS = list(dict.fromkeys(
+    _EXT_BY_LANG["javascript"] + _EXT_BY_LANG["typescript"]
+))
 _ALL_EXTS = sorted({ext for exts in _EXT_BY_LANG.values() for ext in exts})
 
 _IDENT_CHAIN = re.compile(r"[A-Za-z_$][\w$]*(?:::[A-Za-z_$][\w$]*)*(?:\.[A-Za-z_$][\w$]*)*")
@@ -189,8 +193,12 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
         candidates = []
         if target.suffix:
             candidates.append(target)
-        # same-language extensions first, then the rest
-        ordered = _EXT_BY_LANG[lang] + [e for e in _ALL_EXTS if e not in _EXT_BY_LANG[lang]]
+        # JS and TS can resolve each other's extensions, but never unrelated
+        # language files. Rust retains its broader legacy fallback behavior.
+        fallback_exts = _JS_TS_EXTS if lang in ("javascript", "typescript") else _ALL_EXTS
+        ordered = _EXT_BY_LANG[lang] + [
+            e for e in fallback_exts if e not in _EXT_BY_LANG[lang]
+        ]
         candidates.extend(target.with_suffix(ext) for ext in ordered)
         return candidates
 
