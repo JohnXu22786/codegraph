@@ -248,6 +248,22 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(report.files_changed, ALL_FILES)
         self.assertEqual(report.files_skipped, 0)
 
+    def test_force_scan_failure_preserves_existing_index(self):
+        cfg = self._cfg()
+        build_index(cfg)
+
+        with patch("codegraph.builder.scan_text",
+                   side_effect=RuntimeError("temporary scan failure")):
+            with self.assertRaises(RuntimeError):
+                build_index(cfg, force=True)
+
+        store = IndexStore(str(cfg.db_path))
+        try:
+            self.assertIsNotNone(store.file_by_path("app.py"))
+            self.assertIsNotNone(store.symbol_by_qualname("app.main"))
+        finally:
+            store.close()
+
     def test_language_map_change_replaces_unchanged_file_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

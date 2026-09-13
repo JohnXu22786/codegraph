@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,11 +57,17 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     emit = (lambda msg: None) if quiet else (log or print)
 
     db = Path(cfg.db_path)
-    if force and db.exists():
-        db.unlink()
     db.parent.mkdir(parents=True, exist_ok=True)
 
-    store = IndexStore(str(db))
+    # Build forced indexes off to the side so a failed rebuild cannot destroy
+    # the last published index.
+    temporary_db = tempfile.TemporaryDirectory(
+        dir=str(db.parent), prefix=f".{db.name}-"
+    ) if force else None
+    build_db = (Path(temporary_db.name) / db.name
+                if temporary_db is not None else db)
+    store = IndexStore(str(build_db))
+    build_succeeded = False
     store.set_meta("root", str(Path(cfg.root).resolve()))
     scan_config = _scan_config(cfg)
     scan_config_changed = store.get_meta("scan_config") != scan_config
@@ -175,8 +183,15 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         for row in store.conn.execute(
                 "SELECT lang, COUNT(*) AS n FROM files GROUP BY lang ORDER BY lang"):
             report.languages[row["lang"]] = row["n"]
+        build_succeeded = True
     finally:
         store.close()
+        if temporary_db is not None:
+            try:
+                if build_succeeded:
+                    os.replace(build_db, db)
+            finally:
+                temporary_db.cleanup()
 
     report.files_scanned = len(discovered)
     report.elapsed = time.monotonic() - started
