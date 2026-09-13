@@ -344,6 +344,15 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertIn(("A.counts", "System.out.println"),
                       {(c.caller, c.callee) for c in scan.calls})
 
+    def test_java_constructor_is_indexed_as_a_method(self):
+        src = "class A { A() {} }\n"
+        scan = quick.quick_scan(src, "java")
+        by_q = {s.qualname: s for s in scan.symbols}
+        self.assertIn("A.A", by_q)
+        self.assertEqual(by_q["A.A"].kind, "method")
+        self.assertEqual(by_q["A.A"].parent, "A")
+        self.assertEqual(by_q["A.A"].signature, "")
+
     def test_bom_first_line_import_survives(self):
         src = "\ufeffimport os\n\ndef f():\n    pass\n"
         scan = quick.quick_scan(src, "python")
