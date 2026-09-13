@@ -527,7 +527,8 @@ def _scan_java(text, lang, rel_path=None):
 # --------------------------------------------------------------------------
 
 RE_RS_USE = re.compile(r"^[ \t]*use\s+([A-Za-z_][\w:]*(?:::\{[^;]*)?\s*;?)", re.M)
-RE_RS_MOD = re.compile(r"^[ \t]*mod\s+(\w+)\s*;", re.M)
+RE_RS_MOD = re.compile(
+    r"^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;", re.M)
 RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
 RE_RS_TYPE = re.compile(r"^\s*(?:pub\s+)?(struct|enum)\s+(\w+)")
 RE_RS_TRAIT = re.compile(r"^\s*(?:pub\s+)?trait\s+(\w+)")

@@ -150,8 +150,8 @@ class ResolverTest(unittest.TestCase):
             src = root / "src"
             (src / "child").mkdir(parents=True)
             (src / "lib.rs").write_text(
-                "mod child;\n"
-                "mod shared;\n"
+                "pub mod child;\n"
+                "pub mod shared;\n"
                 "use crate::shared::shared_fn;\n"
                 "use self::child::child_fn;\n"
                 "use crate::root_fn;\n"
@@ -160,16 +160,38 @@ class ResolverTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (src / "child.rs").write_text(
-                "mod nested;\n"
+                "pub mod nested;\n"
+                "use shared::other_fn;\n"
                 "use super::shared::shared_fn;\n"
                 "use self::nested::nested_fn;\n"
-                "fn child_fn() { shared_fn(); nested_fn(); }\n",
+                "fn child_fn() { shared_fn(); other_fn(); nested_fn(); }\n",
                 encoding="utf-8",
             )
             (src / "shared.rs").write_text(
-                "pub fn shared_fn() {}\n", encoding="utf-8")
+                "pub fn shared_fn() {}\n"
+                "pub fn other_fn() {}\n", encoding="utf-8")
             (src / "child" / "nested.rs").write_text(
                 "pub fn nested_fn() {}\n", encoding="utf-8")
+            (src / "main.rs").write_text(
+                "pub mod main_child;\n"
+                "use crate::main_fn;\n"
+                "fn main_fn() {}\n"
+                "fn main() { main_fn(); }\n",
+                encoding="utf-8",
+            )
+            (src / "main_child.rs").write_text(
+                "use crate::main_fn;\n"
+                "fn call() { main_fn(); }\n",
+                encoding="utf-8",
+            )
+            bin_dir = src / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "tool.rs").write_text(
+                "use crate::tool_fn;\n"
+                "fn tool_fn() {}\n"
+                "fn main() { tool_fn(); }\n",
+                encoding="utf-8",
+            )
 
             cfg = load_config(root=str(root))
             cfg.engine = "quick"
@@ -201,8 +223,24 @@ class ResolverTest(unittest.TestCase):
                     "src/shared.rs",
                 )
                 self.assertEqual(
+                    imports[("src/child.rs", "shared::other_fn")],
+                    "src/shared.rs",
+                )
+                self.assertEqual(
                     imports[("src/child.rs", "self::nested::nested_fn")],
                     "src/child/nested.rs",
+                )
+                self.assertEqual(
+                    imports[("src/child.rs", "nested")],
+                    "src/child/nested.rs",
+                )
+                self.assertEqual(
+                    imports[("src/main_child.rs", "crate::main_fn")],
+                    "src/main.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bin/tool.rs", "crate::tool_fn")],
+                    "src/bin/tool.rs",
                 )
 
                 call = resolve_callee(store, lib_id, "shared_fn")

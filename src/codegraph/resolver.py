@@ -168,38 +168,6 @@ def _names_of(imp) -> list:
         return []
 
 
-def _rust_crate_dir(store: IndexStore, file_path: Path) -> Path:
-    """Return the relative directory containing a Rust crate root.
-
-    Rust's ``crate::`` paths are rooted at the crate source root, not at the
-    directory containing the importing file.  The index does not retain
-    Cargo metadata, so use the nearest indexed ``lib.rs``/``main.rs`` as the
-    crate-root marker and fall back to common source-tree layouts.
-    """
-    file_dir = file_path.parent
-
-    # Cargo binaries in src/bin are independent crate roots even when the
-    # package also has src/lib.rs or src/main.rs.
-    if file_dir.name == "bin" and file_path.name != "mod.rs":
-        return file_dir
-
-    for directory in (file_dir, *file_dir.parents):
-        if any(store.file_by_path((directory / name).as_posix())
-               for name in _RUST_CRATE_ROOT_FILES):
-            return directory
-
-    parts = file_path.parts[:-1]
-    if "src" in parts:
-        # Use the deepest source directory when a workspace contains nested
-        # source trees.
-        src_index = max(index for index, part in enumerate(parts)
-                        if part == "src")
-        return Path(*parts[:src_index + 1])
-    # A project without Cargo's src layout commonly keeps one crate below a
-    # top-level directory (as the test fixture does).
-    return Path(parts[0]) if parts else Path(".")
-
-
 def _rust_module_dir(file_path: Path, crate_dir: Path) -> Path:
     """Return the directory in which the file's child modules are defined."""
     if file_path.name == "mod.rs":
@@ -218,27 +186,126 @@ def _rust_module_file_candidates(module_dir: Path):
     return [module_dir.with_suffix(".rs"), module_dir / "mod.rs"]
 
 
-def _rust_root_file_candidates(crate_dir: Path, importing_file: Path):
-    """Return crate-root files, preferring the importing root when known."""
-    names = list(_RUST_CRATE_ROOT_FILES)
-    if importing_file.parent == crate_dir and importing_file.name in names:
-        names.remove(importing_file.name)
-        names.insert(0, importing_file.name)
-    return [crate_dir / name for name in names]
+def _rust_root_paths(store: IndexStore, file_path: Path):
+    """Return possible crate-root files near a Rust file.
+
+    ``lib.rs`` and ``main.rs`` are the conventional roots.  Cargo also makes
+    every Rust file directly under ``src/bin`` an independently named binary
+    root, so those files are included as well.
+    """
+    roots = []
+    seen = set()
+    bin_paths = None
+
+    def add(path):
+        if path in seen:
+            return
+        row = store.file_by_path(path.as_posix())
+        if row is not None and row["lang"] == "rust":
+            seen.add(path)
+            roots.append(path)
+
+    for directory in (file_path.parent, *file_path.parent.parents):
+        for name in _RUST_CRATE_ROOT_FILES:
+            add(directory / name)
+        if directory.name == "bin":
+            if bin_paths is None:
+                bin_paths = [Path(row["path"]) for row in store.conn.execute(
+                    "SELECT path FROM files WHERE lang = ? ORDER BY path",
+                    ("rust",)
+                )]
+            for path in bin_paths:
+                if path.parent == directory:
+                    add(path)
+    return roots
+
+
+def _rust_reaches(store: IndexStore, root_path: Path, target_path: Path):
+    """Whether Rust ``mod`` declarations connect root_path to target_path."""
+    crate_dir = root_path.parent
+    pending = [root_path]
+    visited = set()
+    while pending:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        if current == target_path:
+            return True
+        row = store.file_by_path(current.as_posix())
+        if row is None or row["lang"] != "rust":
+            continue
+        module_dir = _rust_module_dir(current, crate_dir)
+        for imp in store.imports_for_file(row["id"]):
+            if imp["kind"] != "mod":
+                continue
+            for candidate in _rust_module_file_candidates(
+                    module_dir / imp["module"]):
+                if store.file_by_path(candidate.as_posix()) is not None:
+                    pending.append(candidate)
+    return False
+
+
+def _rust_crate_root(store: IndexStore, file_path: Path):
+    """Return ``(crate directory, root file)`` for an indexed Rust file."""
+    roots = _rust_root_paths(store, file_path)
+    if file_path in roots:
+        return file_path.parent, file_path
+
+    reachable = [path for path in roots
+                 if _rust_reaches(store, path, file_path)]
+    if reachable:
+        root_path = reachable[0]
+        return root_path.parent, root_path
+    if roots:
+        root_path = roots[0]
+        return root_path.parent, root_path
+
+    # Fallback for source trees that do not contain an indexed root marker.
+    if file_path.parent.name == "bin" and file_path.name != "mod.rs":
+        return file_path.parent, file_path
+    parts = file_path.parts[:-1]
+    if "src" in parts:
+        src_index = max(index for index, part in enumerate(parts)
+                        if part == "src")
+        return Path(*parts[:src_index + 1]), None
+    return (Path(parts[0]) if parts else Path(".")), None
+
+
+def _rust_root_file_candidates(crate_dir: Path, importing_file: Path,
+                               crate_root=None):
+    """Return the selected crate root, or conventional root candidates."""
+    if crate_root is not None:
+        return [crate_root]
+    if (importing_file.parent == crate_dir and
+            (importing_file.name in _RUST_CRATE_ROOT_FILES or
+             crate_dir.name == "bin")):
+        return [importing_file]
+    return [crate_dir / name for name in _RUST_CRATE_ROOT_FILES]
+
+
+def _rust_has_symbol(store: IndexStore, path: Path, name: str):
+    row = store.file_by_path(path.as_posix())
+    if row is None:
+        return False
+    return store.conn.execute(
+        "SELECT 1 FROM symbols WHERE file_id = ? AND name = ? LIMIT 1",
+        (row["id"], name),
+    ).fetchone() is not None
 
 
 def _rust_candidates(store: IndexStore, file: dict, module_text: str,
-                     root: Path):
+                     import_kind=None):
     """Build root-relative candidates for a Rust module or use path."""
     file_path = Path(file["path"])
-    crate_dir = _rust_crate_dir(store, file_path)
+    crate_dir, crate_root = _rust_crate_root(store, file_path)
     module_dir = _rust_module_dir(file_path, crate_dir)
     parts = module_text.split("::")
     qualifier = parts[0]
     explicit_relative = qualifier in ("crate", "self", "super")
 
     if qualifier == "crate":
-        base = crate_dir
+        bases = [crate_dir]
         parts = parts[1:]
     elif qualifier in ("self", "super"):
         base = module_dir
@@ -252,11 +319,17 @@ def _rust_candidates(store: IndexStore, file: dict, module_text: str,
                 if base == crate_dir:
                     return []
                 base = base.parent
+        bases = [base]
     else:
-        # A non-qualified Rust module path is relative to the current module.
-        # This also fixes ``mod child;`` inside foo.rs (child lives in
-        # foo/child.rs, not beside foo.rs).
-        base = module_dir
+        # ``mod`` declarations are relative to the current module.  A bare
+        # ``use`` path is also crate-root-relative in Rust 2015; try that
+        # first, then the current module for newer Rust layouts.
+        if import_kind == "mod":
+            bases = [module_dir]
+        else:
+            bases = [crate_dir]
+            if module_dir != crate_dir:
+                bases.append(module_dir)
 
     candidates = []
 
@@ -265,41 +338,45 @@ def _rust_candidates(store: IndexStore, file: dict, module_text: str,
             candidates.append(path)
 
     if not parts:
-        if qualifier == "self":
+        if qualifier == "self" and bases[0] == module_dir:
             add(file_path)
-        elif base == crate_dir:
-            for path in _rust_root_file_candidates(crate_dir, file_path):
+        elif bases[0] == crate_dir:
+            for path in _rust_root_file_candidates(
+                    crate_dir, file_path, crate_root):
                 add(path)
         else:
-            for path in _rust_module_file_candidates(base):
+            for path in _rust_module_file_candidates(bases[0]):
                 add(path)
         return candidates
 
     # The final path component may name either a child module or an item
     # inside the preceding module.  Try module-file prefixes from longest to
     # shortest so both ``crate::a::b`` and ``crate::a::function`` work.
-    for end in range(len(parts), 0, -1):
-        module_path = base.joinpath(*parts[:end])
-        for path in _rust_module_file_candidates(module_path):
-            add(path)
+    for base in bases:
+        for end in range(len(parts), 0, -1):
+            module_path = base.joinpath(*parts[:end])
+            for path in _rust_module_file_candidates(module_path):
+                add(path)
 
     # Qualified paths can also import an item defined directly in their base
-    # module (for example, ``use super::helper``).  An unqualified external
-    # path must not fall back to the current file, or external imports would
-    # become falsely resolved.
+    # module (for example, ``use super::helper``).  Unqualified paths do not
+    # use this fallback, so external imports cannot become local by accident.
     if explicit_relative:
-        if qualifier == "self" and base == module_dir:
-            add(file_path)
-        elif base == crate_dir:
-            for path in _rust_root_file_candidates(crate_dir, file_path):
-                add(path)
-        else:
-            for path in _rust_module_file_candidates(base):
-                add(path)
+        item_name = parts[-1]
+        for base in bases:
+            if base == crate_dir:
+                fallback = _rust_root_file_candidates(
+                    crate_dir, file_path, crate_root)
+            else:
+                fallback = _rust_module_file_candidates(base)
+            for path in fallback:
+                if _rust_has_symbol(store, path, item_name):
+                    add(path)
     return candidates
 
 
-def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
+def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
+                            import_kind=None):
     """Return root-relative file paths considered for a module import."""
     file = store.file_by_id(file_id)
     if file is None or not module_text:
@@ -363,7 +440,8 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
         if module_text in ("std", "core", "alloc") or \
                 module_text.startswith(("std::", "core::", "alloc::")):
             return []
-        return [rel for cand in _rust_candidates(store, file, module_text, root)
+        return [rel for cand in _rust_candidates(store, file, module_text,
+                                                 import_kind)
                 if (rel := rel_of(cand)) is not None]
 
     # --- go / java: try the module text as a path under the root ----------
@@ -376,9 +454,11 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str):
     return [rel for cand in cands if (rel := rel_of(cand)) is not None]
 
 
-def resolve_module(store: IndexStore, file_id: int, module_text: str):
+def resolve_module(store: IndexStore, file_id: int, module_text: str,
+                   import_kind=None):
     """Return the file id an import statement refers to, or None."""
-    for cand in _module_candidate_paths(store, file_id, module_text):
+    for cand in _module_candidate_paths(store, file_id, module_text,
+                                        import_kind):
         row = store.file_by_path(cand.as_posix())
         if row:
             return row["id"]
@@ -394,7 +474,8 @@ def _competing_import_files(store: IndexStore, file_id: int):
         target_id = imp["target_id"]
         if target_id is None:
             continue
-        for path in _module_candidate_paths(store, file_id, imp["module"]):
+        for path in _module_candidate_paths(store, file_id, imp["module"],
+                                            imp["kind"]):
             row = store.file_by_path(path.as_posix())
             if row and row["id"] != target_id and row["id"] not in selected:
                 blocked.add(row["id"])
@@ -421,7 +502,7 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
     with store.transaction():
         if file_ids is None:
             import_rows = store.conn.execute(
-                "SELECT id, file_id, module FROM imports ORDER BY id"
+                "SELECT id, file_id, module, kind FROM imports ORDER BY id"
             ).fetchall()
             call_rows = store.conn.execute(
                 "SELECT id, file_id, caller_name, callee FROM calls ORDER BY id"
@@ -476,7 +557,8 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                 for chunk in _id_chunks(import_ids):
                     placeholders = ", ".join("?" for _ in chunk)
                     import_rows.extend(store.conn.execute(
-                        f"SELECT id, file_id, module FROM imports WHERE id IN ({placeholders})",
+                        f"SELECT id, file_id, module, kind FROM imports "
+                        f"WHERE id IN ({placeholders})",
                         chunk,
                     ).fetchall())
                 import_rows.sort(key=lambda row: row["id"])
@@ -501,7 +583,8 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
         }
 
         for row in import_rows:
-            target = resolve_module(store, row["file_id"], row["module"])
+            target = resolve_module(
+                store, row["file_id"], row["module"], row["kind"])
             store.conn.execute(
                 "UPDATE imports SET target_id = ? WHERE id = ?", (target, row["id"])
             )

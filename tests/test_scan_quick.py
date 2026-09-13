@@ -263,6 +263,14 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertEqual(by_q["Shape"].kind, "interface")
         self.assertEqual(by_q["Shape.area"].kind, "method")
 
+    def test_rust_public_mod_imports(self):
+        src = "pub mod shared;\npub(crate) mod internal;\n"
+        imports = quick.quick_scan(src, "rust").imports
+        self.assertEqual(
+            [(item.module, item.kind) for item in imports],
+            [("shared", "mod"), ("internal", "mod")],
+        )
+
     def test_get_set_are_valid_method_names(self):
         src = (
             "class Store {\n"
