@@ -16,7 +16,7 @@ from .scanner import deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
-_RESOLVER_VERSION = 1
+_RESOLVER_VERSION = 2
 
 
 @dataclass
