@@ -16,6 +16,8 @@ from .scanner import deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
+_RESOLVER_VERSION = 1
+
 
 @dataclass
 class IndexReport:
@@ -98,6 +100,8 @@ def _scan_config(cfg: ProjectConfig, include_cargo=True,
     return json.dumps(
         {"engine": cfg.engine, "language_map": cfg.language_map,
          "providers": providers,
+         # A resolver change must revisit unchanged payloads in existing DBs.
+         "resolver_version": _RESOLVER_VERSION,
         # Cargo roots affect resolution even though they do not affect the
         # per-file scanner payloads.  Including their state invalidates a
         # no-source-change incremental build when a root path moves.
@@ -188,6 +192,10 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     cargo_metadata_changed = (
         previous_scan_config.get("cargo_manifests") !=
         current_scan_config["cargo_manifests"]
+    )
+    resolver_version_changed = (
+        previous_scan_config.get("resolver_version") !=
+        current_scan_config["resolver_version"]
     )
     previous_providers = previous_scan_config.get("providers", {})
     if not isinstance(previous_providers, dict):
@@ -282,14 +290,16 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         needs_resolution = (
             changed_file_ids or recheck_call_ids or recheck_import_ids or
             changed_symbol_names or removed_file or resolution_pending or
-            cargo_metadata_changed or rust_structure_changed
+            cargo_metadata_changed or rust_structure_changed or
+            resolver_version_changed
         )
         if needs_resolution:
             # Payload transactions commit before this pass. Persist the retry
             # marker first so a failed resolution is retried on the next run
             # instead of being hidden by unchanged file digests.
             store.set_meta("resolution_pending", "1")
-            if resolution_pending or cargo_metadata_changed or rust_structure_changed:
+            if (resolution_pending or cargo_metadata_changed or
+                    rust_structure_changed or resolver_version_changed):
                 resolve_all(store)
             else:
                 resolve_all(

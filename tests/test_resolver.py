@@ -156,6 +156,7 @@ class ResolverTest(unittest.TestCase):
                 "pub use crate::shared::{shared_fn};\n"
                 "pub(crate) use self::child::{child_fn};\n"
                 "use crate::root_fn;\n"
+                "use root_fn;\n"
                 "fn root_fn() {}\n"
                 "fn call() { shared_fn(); child_fn(); root_fn(); }\n",
                 encoding="utf-8",
@@ -201,6 +202,7 @@ class ResolverTest(unittest.TestCase):
             try:
                 lib_id = store.file_by_path("src/lib.rs")["id"]
                 child_id = store.file_by_path("src/child.rs")["id"]
+                tool_id = store.file_by_path("src/bin/tool.rs")["id"]
                 imports = {
                     (store.file_by_id(row["file_id"])["path"], row["module"]):
                     store.file_by_id(row["target_id"])["path"]
@@ -219,6 +221,8 @@ class ResolverTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     imports[("src/lib.rs", "crate::root_fn")], "src/lib.rs")
+                self.assertEqual(
+                    imports[("src/lib.rs", "root_fn")], "src/lib.rs")
                 self.assertEqual(
                     imports[("src/child.rs", "super::shared::shared_fn")],
                     "src/shared.rs",
@@ -239,9 +243,10 @@ class ResolverTest(unittest.TestCase):
                     imports[("src/main_child.rs", "crate::main_fn")],
                     "src/main.rs",
                 )
-                self.assertEqual(
-                    imports[("src/bin/tool.rs", "crate::tool_fn")],
-                    "src/bin/tool.rs",
+                self.assertIsNone(
+                    store.find_import(
+                        module="crate::tool_fn", file_id=tool_id,
+                    )["target_id"]
                 )
 
                 call = resolve_callee(store, lib_id, "shared_fn")
@@ -309,6 +314,7 @@ class ResolverTest(unittest.TestCase):
             build_index(cfg)
             store = IndexStore(str(cfg.db_path))
             try:
+                auto_bin_id = store.file_by_path("src/bin/auto/main.rs")["id"]
                 imports = {
                     (store.file_by_id(row["file_id"])["path"], row["module"]):
                     store.file_by_id(row["target_id"])["path"]
@@ -333,17 +339,20 @@ class ResolverTest(unittest.TestCase):
                     imports[("src/bar/lib.rs", "crate::root_fn")],
                     "src/lib.rs",
                 )
-                self.assertEqual(
-                    imports[("legacy/lib.rs", "crate::root_fn")],
-                    "legacy/main.rs",
+                legacy_id = store.file_by_path("legacy/lib.rs")["id"]
+                self.assertIsNone(
+                    store.find_import(
+                        module="crate::root_fn", file_id=legacy_id,
+                    )["target_id"]
                 )
                 self.assertEqual(
                     imports[("src/bin/auto/main.rs", "child")],
                     "src/bin/auto/child.rs",
                 )
-                self.assertEqual(
-                    imports[("src/bin/auto/main.rs", "crate::bin_fn")],
-                    "src/bin/auto/main.rs",
+                self.assertIsNone(
+                    store.find_import(
+                        module="crate::bin_fn", file_id=auto_bin_id,
+                    )["target_id"]
                 )
             finally:
                 store.close()
@@ -361,6 +370,8 @@ class ResolverTest(unittest.TestCase):
                 "[lib]\npath = \"src/entry.rs\"\n\n"
                 "[[bin]]\nname = \"tool\"\n"
                 "path = \"src/bin/tools/custom.rs\"\n\n"
+                "[[bin]]\nname = \"flat\"\n"
+                "path = \"src/bin/flat.rs\"\n\n"
                 "[[example]]\nname = \"demo-example\"\n"
                 "path = \"examples/nested/demo.rs\"\n",
                 encoding="utf-8",
@@ -381,6 +392,13 @@ class ResolverTest(unittest.TestCase):
             )
             (root / "src" / "bin" / "tools" / "nested.rs").write_text(
                 "use crate::bin_fn;\n", encoding="utf-8")
+            (root / "src" / "bin" / "flat.rs").write_text(
+                "mod child;\n", encoding="utf-8")
+            (root / "src" / "bin" / "child.rs").write_text(
+                "mod nested;\n", encoding="utf-8")
+            (root / "src" / "bin" / "child" / "nested.rs").parent.mkdir()
+            (root / "src" / "bin" / "child" / "nested.rs").write_text(
+                "fn nested() {}\n", encoding="utf-8")
             (root / "src" / "main.rs").write_text(
                 "mod main_child;\n"
                 "use crate::unconfigured;\nfn unconfigured() {}\n",
@@ -422,6 +440,14 @@ class ResolverTest(unittest.TestCase):
                     imports[("src/bin/tools/custom.rs", "crate::bin_fn")],
                     "src/bin/tools/custom.rs",
                 )
+                self.assertEqual(
+                    imports[("src/bin/flat.rs", "child")],
+                    "src/bin/child.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bin/child.rs", "nested")],
+                    "src/bin/child/nested.rs",
+                )
                 self.assertIsNone(
                     store.find_import(module="crate::unconfigured")["target_id"]
                 )
@@ -436,6 +462,38 @@ class ResolverTest(unittest.TestCase):
                     store.file_by_id(example["target_id"])["path"],
                     "examples/nested/demo.rs",
                 )
+            finally:
+                store.close()
+
+    def test_rust_no_cargo_nested_binary_files_are_not_crate_roots(self):
+        """Nested binary-like files need Cargo target configuration."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bin_dir = root / "src" / "bin"
+            (bin_dir / "nested").mkdir(parents=True)
+            (bin_dir / "tool.rs").write_text(
+                "use crate::tool_fn;\nfn tool_fn() {}\n",
+                encoding="utf-8",
+            )
+            (bin_dir / "nested" / "main.rs").write_text(
+                "use crate::nested_fn;\nfn nested_fn() {}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                for path, module in (
+                        ("src/bin/tool.rs", "crate::tool_fn"),
+                        ("src/bin/nested/main.rs", "crate::nested_fn")):
+                    file_id = store.file_by_path(path)["id"]
+                    self.assertIsNone(
+                        store.find_import(
+                            module=module, file_id=file_id,
+                        )["target_id"]
+                    )
             finally:
                 store.close()
 
@@ -631,14 +689,21 @@ class ResolverTest(unittest.TestCase):
                 encoding="utf-8",
             )
             src.joinpath("lib.rs").write_text(
-                "mod child;\nmod inner;\n", encoding="utf-8")
+                "mod child;\nmod inner;\nmod root_only;\n", encoding="utf-8")
             src.joinpath("child.rs").write_text(
-                "mod inner;\nuse inner::foo;\nfn call() { foo(); }\n",
+                "mod inner;\n"
+                "use inner::foo;\n"
+                "use root_only::foo;\n"
+                "use local_item;\n"
+                "fn local_item() {}\n"
+                "fn call() { foo(); }\n",
                 encoding="utf-8",
             )
             src.joinpath("inner.rs").write_text(
                 "fn foo() {}\n", encoding="utf-8")
             src.joinpath("child", "inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+            src.joinpath("root_only.rs").write_text(
                 "fn foo() {}\n", encoding="utf-8")
 
             cfg = load_config(root=str(root))
@@ -650,6 +715,58 @@ class ResolverTest(unittest.TestCase):
                 self.assertEqual(
                     store.file_by_id(row["target_id"])["path"],
                     "src/child/inner.rs",
+                )
+                self.assertIsNone(
+                    store.find_import(module="root_only::foo")["target_id"]
+                )
+                self.assertEqual(
+                    store.find_import(module="local_item")["target_id"],
+                    store.file_by_path("src/child.rs")["id"],
+                )
+            finally:
+                store.close()
+
+    def test_rust_2015_bare_use_does_not_fallback_to_current_module(self):
+        """Rust 2015 bare use paths stay crate-relative without a root."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            (src / "parent").mkdir(parents=True)
+            src.joinpath("lib.rs").write_text(
+                "fn unrelated_root_fn() {}\n", encoding="utf-8")
+            src.joinpath("parent.rs").write_text(
+                "mod inner;\n"
+                "use inner::foo;\n"
+                "use self::inner::foo;\n",
+                encoding="utf-8",
+            )
+            src.joinpath("parent", "inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+            src.joinpath("orphan.rs").write_text(
+                "use super::unrelated_root_fn;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                parent_id = store.file_by_path("src/parent.rs")["id"]
+                self.assertEqual(
+                    resolve_module(store, parent_id, "inner"),
+                    store.file_by_path("src/parent/inner.rs")["id"],
+                )
+                bare = store.find_import(module="inner::foo")
+                self.assertIsNone(bare["target_id"])
+                explicit = store.find_import(module="self::inner::foo")
+                self.assertEqual(
+                    store.file_by_id(explicit["target_id"])['path'],
+                    "src/parent/inner.rs",
+                )
+                orphan_id = store.file_by_path("src/orphan.rs")["id"]
+                self.assertIsNone(
+                    store.find_import(
+                        module="super::unrelated_root_fn", file_id=orphan_id,
+                    )["target_id"]
                 )
             finally:
                 store.close()

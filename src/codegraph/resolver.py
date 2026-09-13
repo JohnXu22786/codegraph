@@ -221,7 +221,8 @@ def _rust_module_dir(file_path: Path, crate_dir: Path, crate_root=None) -> Path:
     if (crate_root is None and file_path.parent == crate_dir and
             file_path.name in _RUST_CRATE_ROOT_FILES):
         return file_path.parent
-    if file_path.parent == crate_dir and crate_dir.name == "bin":
+    if (crate_root is None and file_path.parent == crate_dir and
+            crate_dir.name == "bin"):
         return file_path.parent
     return file_path.with_suffix("")
 
@@ -695,21 +696,9 @@ def _rust_all_root_paths(store: IndexStore):
         # nested foo/main.rs or foo/lib.rs is therefore a normal module file.
         for path in rust_paths:
             if path.name in _RUST_CRATE_ROOT_FILES and (
-                path.parent == Path(".") or path.parent.name == "src" or
-                    len(path.parts) == 2) and not _rust_declares_module(
+                path.parent == Path(".") or path.parent.name == "src") and \
+                    not _rust_declares_module(
                 store, path, rust_paths):
-                root_path = add(path)
-                if root_path is not None:
-                    editions[root_path] = 2015
-            # Preserve Cargo's conventional src/bin/<name>.rs binary roots
-            # even when a manifest is absent from the indexed tree.
-            if path.parent.name == "bin" and path.parent.parent.name == "src":
-                root_path = add(path)
-                if root_path is not None:
-                    editions[root_path] = 2015
-            if (path.name == "main.rs" and path.parent.name != "bin" and
-                    path.parent.parent.name == "bin" and
-                    path.parent.parent.parent.name == "src"):
                 root_path = add(path)
                 if root_path is not None:
                     editions[root_path] = 2015
@@ -765,17 +754,8 @@ def _rust_crate_root(store: IndexStore, file_path: Path):
         cache[file_path] = result
         return result
 
-    # Fallback for source trees that do not contain an indexed root marker.
-    if file_path.parent.name == "bin" and file_path.name != "mod.rs":
-        result = file_path.parent, file_path
-        cache[file_path] = result
-        return result
-    if (file_path.name == "main.rs" and file_path.parent.name != "bin" and
-            file_path.parent.parent.name == "bin" and
-            file_path.parent.parent.parent.name == "src"):
-        result = file_path.parent, file_path
-        cache[file_path] = result
-        return result
+    # Fall back to a source directory for ordinary module files, but do not
+    # infer nested crate roots without Cargo target configuration.
     parts = file_path.parts[:-1]
     if "src" in parts:
         src_index = max(index for index, part in enumerate(parts)
@@ -860,18 +840,13 @@ def _rust_candidates(store: IndexStore, file: dict, module_text: str,
     else:
         # ``mod`` declarations are relative to the current module.  A bare
         # ``use`` path is crate-root-relative in Rust 2015.  In Rust 2018+
-        # it starts at the current module, with the crate root as a fallback
-        # for the index's heuristic handling of incomplete source trees.
-        if import_kind == "mod":
+        # it starts at the current module.  A crate-root path must be explicit.
+        if import_kind in (None, "mod"):
             bases = [module_dir]
         elif crate_root is not None and _rust_edition(store, crate_root) >= 2018:
             bases = [module_dir]
-            if module_dir != crate_dir:
-                bases.append(crate_dir)
         else:
             bases = [crate_dir]
-            if module_dir != crate_dir:
-                bases.append(module_dir)
 
     candidates = []
 
@@ -882,7 +857,7 @@ def _rust_candidates(store: IndexStore, file: dict, module_text: str,
     if not parts:
         if qualifier == "self" and bases[0] == module_dir:
             add(file_path)
-        elif bases[0] == crate_dir:
+        elif bases[0] == crate_dir and crate_root is not None:
             for path in _rust_root_file_candidates(
                     crate_dir, file_path, crate_root):
                 add(path)
@@ -897,6 +872,9 @@ def _rust_candidates(store: IndexStore, file: dict, module_text: str,
     for base in bases:
         if starts_override is not None:
             starts = starts_override
+        elif base == module_dir and (
+                import_kind in (None, "mod") or qualifier == "self"):
+            starts = [file_path]
         elif base == crate_dir:
             starts = [crate_root] if crate_root is not None else []
         elif base == module_dir:
@@ -911,15 +889,20 @@ def _rust_candidates(store: IndexStore, file: dict, module_text: str,
         for path in paths:
             add(path)
 
-    # Qualified paths can also import an item defined directly in their base
-    # module (for example, ``use super::helper``).  Unqualified paths do not
-    # use this fallback, so external imports cannot become local by accident.
-    if explicit_relative and len(parts) == 1:
+    # A use path may name an item directly in its base module (for example,
+    # ``use helper`` or ``use super::helper``), rather than a child module.
+    if import_kind == "use" and len(parts) == 1:
         item_name = parts[-1]
         for base in bases:
-            if base == crate_dir:
-                fallback = _rust_root_file_candidates(
+            if base == module_dir and (
+                    qualifier == "self" or
+                    (not explicit_relative and crate_root is not None and
+                     _rust_edition(store, crate_root) >= 2018)):
+                fallback = [file_path]
+            elif base == crate_dir:
+                fallback = (_rust_root_file_candidates(
                     crate_dir, file_path, crate_root)
+                            if crate_root is not None else [])
             else:
                 fallback = _rust_module_file_candidates(base)
             for path in fallback:
