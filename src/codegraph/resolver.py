@@ -80,7 +80,7 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
         return None
     blocked_file_ids = set(blocked_file_ids)
 
-    # 1. same file: exact qualname, then unique bare name
+    # 1. same file: exact qualname, local qualified owner, then unique bare name
     row = store.conn.execute(
         "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? ORDER BY id LIMIT 1",
         (file_id, callee_text),
@@ -94,6 +94,24 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
         ).fetchall()
         if len(rows) == 1:
             return rows[0]["id"]
+    else:
+        qualified = callee_text.replace("::", ".")
+        rows = store.conn.execute(
+            "SELECT id FROM symbols WHERE file_id = ? "
+            "AND (qualname = ? OR qualname GLOB ?)",
+            (file_id, qualified, f"*.{qualified}"),
+        ).fetchall()
+        if len(rows) == 1:
+            return rows[0]["id"]
+        receiver = qualified.split(".", 1)[0]
+        if receiver in ("self", "this", "Self"):
+            rows = store.conn.execute(
+                "SELECT id FROM symbols WHERE file_id = ? AND name = ? "
+                "AND kind = 'method'",
+                (file_id, name),
+            ).fetchall()
+            if len(rows) == 1:
+                return rows[0]["id"]
 
     alias_target = _rust_alias_symbol(store, file_id, callee_text)
     if alias_target is not None:

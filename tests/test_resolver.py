@@ -77,6 +77,39 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_local_qualified_method_call_beats_imported_same_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.py").write_text(
+                "def helper():\n    return 'imported'\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "import lib\n\n"
+                "class C:\n"
+                "    def helper(self):\n"
+                "        return 'local'\n\n"
+                "    def via_self(self):\n"
+                "        return self.helper()\n\n"
+                "def via_class():\n"
+                "    return C.helper(None)\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.py")["id"]
+                for callee in ("self.helper", "C.helper"):
+                    call = store.find_call(callee=callee, file_id=file_id)
+                    self.assertIsNotNone(call)
+                    self.assertEqual(
+                        store.symbol_by_id(call["callee_id"]).qualname,
+                        "app.C.helper",
+                    )
+            finally:
+                store.close()
+
     def test_absolute_python_import_falls_back_to_source_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
