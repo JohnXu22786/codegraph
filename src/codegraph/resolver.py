@@ -967,17 +967,17 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
                 )
         else:
             parts = module_text.split(".")
+            # Absolute imports are resolved from the project root. Searching
+            # the caller's package ancestors first can select a package-local
+            # module instead of the top-level module named by the import.
+            target = Path(*parts)
             cands = []
-            for up in [file_dir, *file_dir.parents]:
-                if not _is_within(root / up, root):
-                    break
-                target = up.joinpath(*parts)
-                cands.extend(
-                    target / f"__init__{ext}" for ext in _EXT_BY_LANG["python"]
-                )
-                cands.extend(
-                    target.with_suffix(ext) for ext in _EXT_BY_LANG["python"]
-                )
+            cands.extend(
+                target / f"__init__{ext}" for ext in _EXT_BY_LANG["python"]
+            )
+            cands.extend(
+                target.with_suffix(ext) for ext in _EXT_BY_LANG["python"]
+            )
         return [rel for cand in cands if (rel := rel_of(cand)) is not None]
 
     # --- rust: std/core/alloc are external; crate/self/super are internal --
