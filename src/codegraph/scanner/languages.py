@@ -38,8 +38,6 @@ def _skip_java_trivia(text, pos):
         else:
             break
     return pos
-
-
 def _mask_non_code(text):
     """Blank comments and literals while preserving source line breaks."""
     masked = list(text)
