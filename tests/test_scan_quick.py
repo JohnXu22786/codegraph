@@ -432,6 +432,12 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertEqual(by_q["A.A"].parent, "A")
         self.assertEqual(by_q["A.A"].signature, "")
 
+    def test_inline_java_constructor_is_not_recorded_as_a_call(self):
+        scan = quick.quick_scan("class A { A() {} }\n", "java")
+
+        self.assertNotIn(("A.A", "A"),
+                         {(c.caller, c.callee) for c in scan.calls})
+
     def test_bom_first_line_import_survives(self):
         src = "\ufeffimport os\n\ndef f():\n    pass\n"
         scan = quick.quick_scan(src, "python")

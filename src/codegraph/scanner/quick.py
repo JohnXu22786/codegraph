@@ -513,9 +513,15 @@ def _scan_java(text, lang, rel_path=None):
     recs = _finalize(items, n)
     calls = []
     for idx, line in enumerate(lines, start=1):
-        brace = line.find("{")
+        class_match = RE_JAVA_CLASS.match(line)
+        brace = line.find("{", class_match.end()) if class_match else line.find("{")
         if brace >= 0:
             line = line[brace + 1:]
+            if class_match:
+                constructor = RE_JAVA_CONSTRUCTOR.match(line)
+                if (constructor
+                        and constructor.group(1) == class_match.group(1)):
+                    line = line[constructor.end():]
         for callee in _calls_in_line(line, JAVA_EXCLUDE):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
