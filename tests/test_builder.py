@@ -123,6 +123,53 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_resolver_version_change_re_resolves_fallback_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            src.mkdir()
+            (src / "util.py").write_text(
+                "def target():\n    return 'src'\n", encoding="utf-8")
+            (src / "app.py").write_text(
+                "import util\n\n"
+                "def invoke():\n    return util.target()\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                import_row = store.find_import(module="util")
+                self.assertIsNotNone(import_row)
+                store.conn.execute(
+                    "UPDATE imports SET target_id = NULL WHERE id = ?",
+                    (import_row["id"],),
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config["resolver_version"] = 1
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 0)
+            self.assertEqual(report.files_skipped, 2)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                import_row = store.find_import(module="util")
+                self.assertIsNotNone(import_row["target_id"])
+                self.assertEqual(
+                    store.file_by_id(import_row["target_id"])["path"],
+                    "src/util.py",
+                )
+            finally:
+                store.close()
+
     def test_changed_file_reparsed_only(self):
         build_index(self._cfg())
         target = self.root / "pkg" / "pricing.py"
