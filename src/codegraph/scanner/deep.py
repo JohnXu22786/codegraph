@@ -99,7 +99,7 @@ _DECL = {
         "type_alias_declaration": "type",
     },
     "go": {"function_declaration": "function", "method_declaration": "method",
-           "type_declaration": "type"},
+           "type_spec": "type", "type_alias": "type"},
     "java": {
         "class_declaration": "class",
         "interface_declaration": "interface",
@@ -197,6 +197,21 @@ class _Walker:
         for child in recv.children:
             if child.type == "type_identifier":
                 return _node_text(child, self.source).strip()
+            if child.type != "parameter_declaration":
+                continue
+            type_node = child.child_by_field_name("type")
+            if type_node is None:
+                continue
+            return self._type_identifier(type_node)
+        return ""
+
+    def _type_identifier(self, node):
+        if node.type == "type_identifier":
+            return _node_text(node, self.source).strip()
+        for child in node.children:
+            name = self._type_identifier(child)
+            if name:
+                return name
         return ""
 
     def _signature_of(self, node):
@@ -268,16 +283,15 @@ class _Walker:
                 rtype = self._receiver_type(node)
                 parent = f"{self.module}.{rtype}" if self.module and rtype else rtype
                 qual = f"{parent}.{name}" if parent else name
-                rec = SymbolRec("method", name, qual, parent, 0, 0, self._signature_of(node))
-                self.items.append((node.start_point[0] + 1, len(self.stack), rec))
+                start = node.start_point[0] + 1
+                rec = SymbolRec("method", name, qual, parent, start, 0,
+                                self._signature_of(node))
+                self.items.append((start, len(self.stack), rec))
                 return None, "", ""
-            if node_type == "type_declaration":
-                for child in node.children:
-                    if child.type == "interface_type":
-                        kind = "interface"
-                    elif child.type == "struct_type":
-                        kind = "type"
-                return kind, name, ""
+            if node_type == "type_spec":
+                type_node = node.child_by_field_name("type")
+                if type_node is not None and type_node.type == "interface_type":
+                    kind = "interface"
             return kind, name, ""
         if lang == "java" and node_type == "constructor_declaration":
             return kind, name, ""

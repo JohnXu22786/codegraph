@@ -98,5 +98,75 @@ class DeepPythonTest(unittest.TestCase):
         self.assertEqual(deep_sig, quick_sig)
 
 
+@unittest.skipUnless(deep.supports("go"), "tree-sitter Go grammar not installed")
+class DeepGoTest(unittest.TestCase):
+    def test_type_and_receiver_method_symbols(self):
+        src = (
+            "package demo\n"
+            "\n"
+            "type Widget struct {\n"
+            "    value int\n"
+            "}\n"
+            "\n"
+            "func (w *Widget) Reset() {\n"
+            "    w.value = 0\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "widget.go")
+        symbols = {symbol.qualname: symbol for symbol in scan.symbols}
+
+        self.assertEqual(symbols["demo.Widget"].kind, "type")
+        self.assertEqual(symbols["demo.Widget"].parent, "")
+        self.assertEqual(symbols["demo.Widget.Reset"].kind, "method")
+        self.assertEqual(symbols["demo.Widget.Reset"].parent, "demo.Widget")
+
+    def test_grouped_type_declarations_emit_each_type(self):
+        src = (
+            "package demo\n"
+            "\n"
+            "type (\n"
+            "    Widget struct{}\n"
+            "    Runner interface { Run() }\n"
+            ")\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "widget.go")
+        symbols = {symbol.qualname: symbol for symbol in scan.symbols}
+
+        self.assertEqual(
+            {
+                name: (symbol.kind, symbol.name, symbol.parent)
+                for name, symbol in symbols.items()
+            },
+            {
+                "demo.Widget": ("type", "Widget", ""),
+                "demo.Runner": ("interface", "Runner", ""),
+            },
+        )
+
+    def test_method_metadata_excludes_calls_before_method(self):
+        src = (
+            "package demo\n"
+            "\n"
+            "var _ = setup()\n"
+            "\n"
+            "type Widget struct{}\n"
+            "\n"
+            "func (w *Widget) Reset() {\n"
+            "    helper()\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "widget.go")
+        method = next(symbol for symbol in scan.symbols
+                      if symbol.qualname == "demo.Widget.Reset")
+        calls = {call.callee: call.caller for call in scan.calls}
+
+        self.assertEqual(method.start, 7)
+        self.assertEqual(calls["setup"], "")
+        self.assertEqual(calls["helper"], "demo.Widget.Reset")
+
+
 if __name__ == "__main__":
     unittest.main()
