@@ -1,5 +1,6 @@
 """Tests for incremental index building (builder.build_index)."""
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -57,6 +58,23 @@ class BuilderTest(unittest.TestCase):
             report = build_index(self._cfg())
         self.assertEqual(report.files_skipped, ALL_FILES)
         resolve.assert_not_called()
+
+    def test_resolver_config_change_rechecks_unchanged_index(self):
+        cfg = self._cfg()
+        build_index(cfg)
+        store = IndexStore(str(cfg.db_path))
+        try:
+            scan_config = json.loads(store.get_meta("scan_config"))
+            scan_config.pop("resolver_version")
+            store.set_meta("scan_config", json.dumps(scan_config))
+            store.conn.commit()
+        finally:
+            store.close()
+
+        with patch("codegraph.builder.resolve_all") as resolve:
+            report = build_index(cfg)
+        self.assertEqual(report.files_skipped, ALL_FILES)
+        resolve.assert_called_once()
 
     def test_changed_file_reparsed_only(self):
         build_index(self._cfg())

@@ -526,27 +526,193 @@ def _scan_java(text, lang, rel_path=None):
 # rust
 # --------------------------------------------------------------------------
 
-RE_RS_USE = re.compile(r"^[ \t]*use\s+([A-Za-z_][\w:]*(?:::\{[^;]*)?\s*;?)", re.M)
-RE_RS_MOD = re.compile(r"^[ \t]*mod\s+(\w+)\s*;", re.M)
+RE_RS_USE = re.compile(
+    r"^[ \t]*(?:pub(?:\s*\([^)]*\))?\s+)?use\s+([^;]+;)", re.M)
+RE_RS_MOD = re.compile(
+    r"^[ \t]*(?:#\[[^\]]*\]\s*)*"
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;", re.M)
 RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
 RE_RS_TYPE = re.compile(r"^\s*(?:pub\s+)?(struct|enum)\s+(\w+)")
 RE_RS_TRAIT = re.compile(r"^\s*(?:pub\s+)?trait\s+(\w+)")
 RE_RS_IMPL = re.compile(r"^\s*(?:pub\s+)?(?:unsafe\s+)?impl\s+(?:<\s*[^>]*\s*>)?\s*(\w+)")
 
 
+def _rust_use_tree_parts(text):
+    parts = []
+    start = 0
+    depth = 0
+    for index, char in enumerate(text):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    parts.append(text[start:].strip())
+    return [part for part in parts if part]
+
+
+def _rust_mask_comments(text, mask_strings=True, preserve_path_strings=False):
+    """Blank Rust comments and strings while preserving source positions."""
+    chars = list(text)
+    index = 0
+    block_depth = 0
+    line_comment = False
+    string = None
+    string_keep = False
+    raw_end = None
+
+    def blank(start, end):
+        if not mask_strings:
+            return
+        for offset in range(start, end):
+            if chars[offset] != "\n":
+                chars[offset] = " "
+
+    while index < len(chars):
+        if line_comment:
+            if chars[index] == "\n":
+                line_comment = False
+            else:
+                chars[index] = " "
+                index += 1
+            continue
+        if block_depth:
+            if text.startswith("/*", index):
+                blank(index, index + 2)
+                block_depth += 1
+                index += 2
+            elif text.startswith("*/", index):
+                blank(index, index + 2)
+                block_depth -= 1
+                index += 2
+            else:
+                if chars[index] != "\n":
+                    chars[index] = " "
+                index += 1
+            continue
+        if raw_end is not None:
+            if text.startswith(raw_end, index):
+                blank(index, index + len(raw_end))
+                index += len(raw_end)
+                raw_end = None
+            else:
+                blank(index, index + 1)
+                index += 1
+            continue
+        if string is not None:
+            if text[index] == "\\" and index + 1 < len(chars):
+                if not string_keep:
+                    blank(index, index + 2)
+                index += 2
+            else:
+                if not string_keep:
+                    blank(index, index + 1)
+                if text[index] == string:
+                    string = None
+                    string_keep = False
+                index += 1
+            continue
+        raw_prefix = None
+        if chars[index] == "r":
+            raw_prefix = index + 1
+        elif text.startswith("br", index):
+            raw_prefix = index + 2
+        if raw_prefix is not None:
+            hash_end = raw_prefix
+            while hash_end < len(chars) and chars[hash_end] == "#":
+                hash_end += 1
+            if hash_end < len(chars) and chars[hash_end] == '"':
+                raw_end = '"' + ('#' * (hash_end - raw_prefix))
+                blank(index, hash_end + 1)
+                index = hash_end + 1
+                continue
+        if chars[index] == '"':
+            string = '"'
+            string_keep = bool(
+                preserve_path_strings and
+                re.search(r"#\[\s*path\s*=\s*$", "".join(chars[:index]))
+            )
+            if not string_keep:
+                blank(index, index + 1)
+            index += 1
+        elif text.startswith("//", index):
+            chars[index:index + 2] = "  "
+            line_comment = True
+            index += 2
+        elif text.startswith("/*", index):
+            chars[index:index + 2] = "  "
+            block_depth = 1
+            index += 2
+        else:
+            index += 1
+    return "".join(chars)
+
+
+def _rust_use_tree_bindings(text, prefix=""):
+    """Flatten a Rust use tree into ``(path, alias)`` bindings."""
+    text = text.strip()
+    if not text:
+        return []
+    if text.startswith("{") and text.endswith("}"):
+        paths = []
+        for part in _rust_use_tree_parts(text[1:-1]):
+            paths.extend(_rust_use_tree_bindings(part, prefix))
+        return paths
+
+    brace = text.find("{")
+    if brace >= 0 and text.endswith("}"):
+        head = text[:brace].strip()
+        head = re.sub(r"\s*::\s*", "::", head)
+        if head.endswith("::"):
+            head = head[:-2]
+        joined = "::".join(part for part in (prefix, head) if part)
+        paths = []
+        for part in _rust_use_tree_parts(text[brace + 1:-1]):
+            paths.extend(_rust_use_tree_bindings(part, joined))
+        return paths
+
+    alias = None
+    alias_match = re.match(r"^(.*?)\s+as\s+([A-Za-z_]\w*)$", text)
+    if alias_match:
+        text = alias_match.group(1).strip()
+        alias = alias_match.group(2)
+    text = re.sub(r"\s*::\s*", "::", text)
+    text = re.sub(r"::\*$", "", text)
+    if text in ("self", "*"):
+        return [(prefix, alias)] if prefix else []
+    path = "::".join(part for part in (prefix, text) if part)
+    return [(path, alias)] if path else []
+
+
+def _rust_use_tree_paths(text, prefix=""):
+    """Flatten a Rust use tree into paths that can be resolved separately."""
+    return [path for path, _alias in _rust_use_tree_bindings(text, prefix)]
+
+
 def _imports_rust(text):
+    text = _rust_mask_comments(text)
     imports = []
     for m in RE_RS_MOD.finditer(text):
         imports.append(ImportRec(m.group(1), [], "mod", _line_no(text, m.start())))
     for m in RE_RS_USE.finditer(text):
-        module = m.group(1).split("::{")[0].strip().rstrip(";")
-        imports.append(ImportRec(module, [], "use", _line_no(text, m.start())))
+        expression = re.sub(r"//[^\n]*", "", m.group(1))
+        expression = re.sub(r"/\*.*?\*/", "", expression, flags=re.S)
+        expression = expression.strip().rstrip(";").strip()
+        seen = set()
+        for module, alias in _rust_use_tree_bindings(expression):
+            if module and module not in seen:
+                seen.add(module)
+                imports.append(ImportRec(
+                    module, [alias] if alias else [], "use",
+                    _line_no(text, m.start())))
     return imports
 
 
 def _scan_rust(text, lang, rel_path=None):
     module = languages.module_of(rel_path, lang) if rel_path else ""
-    lines = text.splitlines()
+    lines = _rust_mask_comments(text).splitlines()
     n = len(lines)
     depth = 0
     containers = []  # (open_depth, kind, qualname)

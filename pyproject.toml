@@ -22,6 +22,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
 ]
+dependencies = [
+    "tomli>=1.1.0; python_version < '3.11'",
+]
 
 [project.optional-dependencies]
 # tree-sitter grammars sharply improve extraction precision; without them the
