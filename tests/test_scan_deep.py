@@ -121,6 +121,52 @@ class DeepGoTest(unittest.TestCase):
         self.assertEqual(symbols["demo.Widget.Reset"].kind, "method")
         self.assertEqual(symbols["demo.Widget.Reset"].parent, "demo.Widget")
 
+    def test_grouped_type_declarations_emit_each_type(self):
+        src = (
+            "package demo\n"
+            "\n"
+            "type (\n"
+            "    Widget struct{}\n"
+            "    Runner interface { Run() }\n"
+            ")\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "widget.go")
+        symbols = {symbol.qualname: symbol for symbol in scan.symbols}
+
+        self.assertEqual(
+            {
+                name: (symbol.kind, symbol.name, symbol.parent)
+                for name, symbol in symbols.items()
+            },
+            {
+                "demo.Widget": ("type", "Widget", ""),
+                "demo.Runner": ("interface", "Runner", ""),
+            },
+        )
+
+    def test_method_metadata_excludes_calls_before_method(self):
+        src = (
+            "package demo\n"
+            "\n"
+            "var _ = setup()\n"
+            "\n"
+            "type Widget struct{}\n"
+            "\n"
+            "func (w *Widget) Reset() {\n"
+            "    helper()\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "widget.go")
+        method = next(symbol for symbol in scan.symbols
+                      if symbol.qualname == "demo.Widget.Reset")
+        calls = {call.callee: call.caller for call in scan.calls}
+
+        self.assertEqual(method.start, 7)
+        self.assertEqual(calls["setup"], "")
+        self.assertEqual(calls["helper"], "demo.Widget.Reset")
+
 
 if __name__ == "__main__":
     unittest.main()
