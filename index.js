@@ -19,6 +19,7 @@ const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const SRC_DIR = join(PLUGIN_DIR, 'src')
 const DEFAULT_TIMEOUT_MS = 120000
 const MAX_STREAM_BYTES = 2 * 1024 * 1024
+const MAX_ROOT_SESSIONS = 8
 const SESSIONS = new Map()
 
 /** 解析 Python 解释器：配置优先，其次按平台惯例取默认。 */
@@ -274,25 +275,36 @@ class PythonServer {
 }
 
 class RootSession {
-  constructor(config, root) {
+  constructor(config, root, onStateChange) {
     this.server = new PythonServer(config, root)
     this.tail = Promise.resolve()
+    this.pendingCount = 0
+    this.onStateChange = onStateChange
   }
 
   enqueue(task, signal) {
     if (signal?.aborted) return Promise.reject(abortError(signal.reason))
+
+    this.pendingCount += 1
 
     let resolveResult
     let rejectResult
     let settled = false
     let cancelled = false
     let abortListener
+    let released = false
     const result = new Promise((resolve, reject) => {
       resolveResult = resolve
       rejectResult = reject
     })
     const cleanup = () => {
       if (abortListener) signal?.removeEventListener('abort', abortListener)
+    }
+    const release = () => {
+      if (released) return
+      released = true
+      this.pendingCount -= 1
+      this.onStateChange?.()
     }
     const settle = (fn, value) => {
       if (settled) return
@@ -302,6 +314,7 @@ class RootSession {
     }
     abortListener = () => {
       cancelled = true
+      release()
       settle(rejectResult, abortError(signal.reason))
     }
     if (signal) {
@@ -318,8 +331,14 @@ class RootSession {
     })
     this.tail = run.catch(() => undefined)
     run.then(
-      (value) => settle(resolveResult, value),
-      (error) => settle(rejectResult, error),
+      (value) => {
+        release()
+        settle(resolveResult, value)
+      },
+      (error) => {
+        release()
+        settle(rejectResult, error)
+      },
     )
     return result
   }
@@ -333,11 +352,32 @@ function sessionKey(config, root) {
   return `${pythonBin(config)}\0${root}`
 }
 
+function evictSessions() {
+  while (SESSIONS.size > MAX_ROOT_SESSIONS) {
+    let evictedKey
+    let evictedSession
+    for (const [key, session] of SESSIONS) {
+      if (session.pendingCount === 0) {
+        evictedKey = key
+        evictedSession = session
+        break
+      }
+    }
+    if (!evictedSession) return
+    SESSIONS.delete(evictedKey)
+    evictedSession.close()
+  }
+}
+
 function getSession(config, root) {
   const key = sessionKey(config, root)
   let session = SESSIONS.get(key)
   if (!session) {
-    session = new RootSession(config, root)
+    session = new RootSession(config, root, evictSessions)
+    SESSIONS.set(key, session)
+  } else {
+    // Map insertion order is the LRU order.
+    SESSIONS.delete(key)
     SESSIONS.set(key, session)
   }
   return session
@@ -459,7 +499,7 @@ async function executeCodegraph(config, args, execContext, request) {
   const controls = requestController(execContext?.signal, timeoutMs)
   const session = getSession(config, root)
   try {
-    return await session.enqueue(async () => {
+    const queued = session.enqueue(async () => {
       try {
         return await session.server.request(request.name, request.arguments, controls.signal)
       } catch (error) {
@@ -470,6 +510,9 @@ async function executeCodegraph(config, args, execContext, request) {
         })
       }
     }, controls.signal)
+    // Reserve the just-enqueued session before removing older idle sessions.
+    evictSessions()
+    return await queued
   } finally {
     controls.cleanup()
   }
