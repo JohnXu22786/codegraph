@@ -251,9 +251,14 @@ def _rust_mod_path_overrides(store: IndexStore, file):
         return cache[file_id]
 
     text = _rust_mask_comments(text, preserve_path_strings=True)
+
+    def normalize_path_attribute(match):
+        path = re.sub(r"\\(?:\r\n|\n)[ \t]*", "", match.group(1))
+        return f'#[path = "{path}"]'
+
     text = re.sub(
         r'#\[\s*path\s*=\s*"((?:\\.|[^"\\])*)"\s*\]',
-        lambda match: f'#[path = "{match.group(1)}"]',
+        normalize_path_attribute,
         text,
         flags=re.DOTALL,
     )
