@@ -430,6 +430,11 @@ RE_JAVA_METHOD = re.compile(
     r"native|default|transient|volatile|strictfp)\s+)*"
     r"([\w<>\[\],.?]+(?:\s+[\w<>\[\],.?]+)*)\s+(\w+)\s*\(([^)]*)\)"
     r"\s*(?:throws\s+[\w.,\s]+)?")
+# Constructors have no return type, so they need a separate declaration
+# pattern.  The scanner verifies that the name matches the enclosing class.
+RE_JAVA_CONSTRUCTOR = re.compile(
+    r"^\s*(?:(?:public|private|protected)\s+)*(\w+)\s*\(([^)]*)\)"
+    r"\s*(?:throws\s+[\w.,\s]+)?")
 # statement keywords that can never introduce a method declaration
 _JAVA_STMT_HEADS = ("new", "return", "throw", "switch", "if", "for",
                     "while", "catch", "synchronized")
@@ -446,7 +451,7 @@ def _scan_java(text, lang, rel_path=None):
     lines = text.splitlines()
     n = len(lines)
     depth = 0
-    classes = []  # (open_depth, qualname)
+    classes = []  # (open_depth, qualname, kind)
     items = []
     for idx, line in enumerate(lines, start=1):
         m = RE_JAVA_CLASS.match(line) or RE_JAVA_INTERFACE.match(line)
@@ -455,8 +460,19 @@ def _scan_java(text, lang, rel_path=None):
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             kind = "interface" if RE_JAVA_INTERFACE.match(line) else "class"
-            classes.append((depth, qual))
+            classes.append((depth, qual, kind))
             items.append((idx, depth, SymbolRec(kind, m.group(1), qual, parent, idx, 0, "")))
+            if kind == "class":
+                open_brace = line.find("{", m.end())
+                if open_brace >= 0:
+                    candidate = RE_JAVA_CONSTRUCTOR.match(line[open_brace + 1:])
+                    if candidate and candidate.group(1) == m.group(1):
+                        items.append((
+                            idx, depth + 1,
+                            SymbolRec("method", candidate.group(1),
+                                      f"{qual}.{candidate.group(1)}", qual, idx, 0,
+                                      candidate.group(2).strip()),
+                        ))
             depth += line.count("{") - line.count("}")
             while classes and depth <= classes[-1][0]:
                 classes.pop()
@@ -471,6 +487,22 @@ def _scan_java(text, lang, rel_path=None):
             qual = f"{parent}.{m.group(2)}"
             items.append((idx, depth, SymbolRec("method", m.group(2), qual, parent, idx, 0,
                                                 m.group(3).strip())))
+            depth += line.count("{") - line.count("}")
+            while classes and depth <= classes[-1][0]:
+                classes.pop()
+            continue
+        ctor = None
+        if (classes and classes[-1][2] == "class"
+                and depth == classes[-1][0] + 1):
+            candidate = RE_JAVA_CONSTRUCTOR.match(line)
+            if (candidate
+                    and candidate.group(1) == classes[-1][1].rsplit(".", 1)[-1]):
+                ctor = candidate
+        if ctor:
+            parent = classes[-1][1]
+            qual = f"{parent}.{ctor.group(1)}"
+            items.append((idx, depth, SymbolRec("method", ctor.group(1), qual, parent,
+                                                idx, 0, ctor.group(2).strip())))
             depth += line.count("{") - line.count("}")
             while classes and depth <= classes[-1][0]:
                 classes.pop()
