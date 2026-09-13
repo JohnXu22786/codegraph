@@ -243,10 +243,120 @@ class BuilderTest(unittest.TestCase):
             resolve.assert_not_called()
 
     def test_force_reparses_all(self):
-        build_index(self._cfg())
-        report = build_index(self._cfg(), force=True)
+        cfg = self._cfg()
+        build_index(cfg)
+        target = self.root / "pkg" / "pricing.py"
+        target.write_text(
+            '"""Price lookups for the demo shop."""\n\n'
+            "def force_marker():\n    return 1\n",
+            encoding="utf-8",
+        )
+        report = build_index(cfg, force=True)
         self.assertEqual(report.files_changed, ALL_FILES)
         self.assertEqual(report.files_skipped, 0)
+        store = IndexStore(str(cfg.db_path))
+        try:
+            self.assertIsNotNone(store.symbol_by_qualname("pkg.pricing.force_marker"))
+            self.assertIsNone(store.symbol_by_qualname("pkg.pricing.price"))
+        finally:
+            store.close()
+
+    def test_force_scan_failure_preserves_existing_index(self):
+        cfg = self._cfg()
+        build_index(cfg)
+
+        with patch("codegraph.builder.scan_text",
+                   side_effect=RuntimeError("temporary scan failure")):
+            with self.assertRaises(RuntimeError):
+                build_index(cfg, force=True)
+
+        store = IndexStore(str(cfg.db_path))
+        try:
+            self.assertIsNotNone(store.file_by_path("app.py"))
+            self.assertIsNotNone(store.symbol_by_qualname("app.main"))
+        finally:
+            store.close()
+
+    def test_force_incomplete_discovery_preserves_existing_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            hidden = root / "hidden"
+            target = hidden / "keep.py"
+            hidden.mkdir()
+            target.write_text("def keep():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            def incomplete_walk(path, followlinks=False, onerror=None):
+                if onerror is not None:
+                    onerror(PermissionError(13, "Permission denied", str(hidden)))
+                yield str(root), [], []
+
+            with patch("codegraph.scanner.walk.os.walk", incomplete_walk):
+                report = build_index(cfg, force=True, quiet=True)
+
+            self.assertEqual(report.files_removed, 0)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.file_by_path("hidden/keep.py"))
+                self.assertIsNotNone(store.symbol_by_qualname("hidden.keep.keep"))
+            finally:
+                store.close()
+
+    def test_force_read_failure_preserves_existing_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "keep.py"
+            target.write_text("def keep():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            original_read_bytes = Path.read_bytes
+            failed = False
+
+            def fail_target_once(path):
+                nonlocal failed
+                if path == target and not failed:
+                    failed = True
+                    raise OSError("temporary read failure")
+                return original_read_bytes(path)
+
+            with patch.object(Path, "read_bytes", fail_target_once):
+                build_index(cfg, force=True, quiet=True)
+
+            self.assertTrue(failed)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.file_by_path("keep.py"))
+                self.assertIsNotNone(store.symbol_by_qualname("keep.keep"))
+            finally:
+                store.close()
+
+    def test_force_rebuild_publishes_external_database(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "source"
+            db_parent = base / "index"
+            root.mkdir()
+            target = root / "module.py"
+            target.write_text("def original():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            cfg.db_path = str(db_parent / "cg.sqlite")
+            build_index(cfg)
+
+            target.write_text("def replacement():\n    return 2\n", encoding="utf-8")
+            report = build_index(cfg, force=True, quiet=True)
+
+            self.assertEqual(report.files_changed, 1)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.symbol_by_qualname("module.replacement"))
+                self.assertIsNone(store.symbol_by_qualname("module.original"))
+            finally:
+                store.close()
 
     def test_language_map_change_replaces_unchanged_file_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
