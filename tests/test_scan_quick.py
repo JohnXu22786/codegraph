@@ -480,6 +480,20 @@ class QuickGoJavaRustTest(unittest.TestCase):
 
         self.assertFalse(scan.calls)
 
+    def test_constructor_parameter_annotation_is_not_a_call(self):
+        scan = quick.quick_scan(
+            'class A { A(@SuppressWarnings("unused") String x) {} }\n', "java")
+
+        self.assertFalse(scan.calls)
+
+    def test_inline_constructor_body_can_start_on_next_line(self):
+        scan = quick.quick_scan(
+            "class A { A()\n{ initialize(); } }\n", "java")
+        calls = {(c.caller, c.callee) for c in scan.calls}
+
+        self.assertNotIn(("A.A", "A"), calls)
+        self.assertIn(("A.A", "initialize"), calls)
+
     def test_bom_first_line_import_survives(self):
         src = "\ufeffimport os\n\ndef f():\n    pass\n"
         scan = quick.quick_scan(src, "python")

@@ -430,9 +430,8 @@ RE_JAVA_METHOD = re.compile(
     r"\s*(?:throws\s+[\w.,\s]+)?")
 # Constructors have no return type, so they need a separate declaration
 # pattern.  The scanner verifies that the name matches the enclosing class.
-RE_JAVA_CONSTRUCTOR = re.compile(
-    r"^\s*(\w+)\s*\(([^)]*)\)"
-    r"\s*(?:throws\s+[\w.,\s]+)?")
+RE_JAVA_CONSTRUCTOR = re.compile(r"^\s*(\w+)\s*\(")
+RE_JAVA_CONSTRUCTOR_TAIL = re.compile(r"\s*(?:throws\s+[\w.,\s]+)?")
 # statement keywords that can never introduce a method declaration
 _JAVA_STMT_HEADS = ("new", "return", "throw", "switch", "if", "for",
                     "while", "catch", "synchronized")
@@ -524,8 +523,16 @@ def _java_type_match(line):
 
 
 def _java_constructor_match(text):
-    return RE_JAVA_CONSTRUCTOR.match(
-        _java_mask_prefix(text, _JAVA_CONSTRUCTOR_MODIFIERS, True))
+    declaration_line = _java_mask_prefix(text, _JAVA_CONSTRUCTOR_MODIFIERS, True)
+    match = RE_JAVA_CONSTRUCTOR.match(declaration_line)
+    if not match:
+        return None
+    open_paren = match.end() - 1
+    close_paren = _java_balanced_end(text, open_paren)
+    if close_paren <= open_paren or text[close_paren - 1] != ")":
+        return None
+    tail = RE_JAVA_CONSTRUCTOR_TAIL.match(text, close_paren)
+    return (match.group(1), text[open_paren + 1:close_paren - 1], tail.end())
 
 
 def _java_inline_members(text):
@@ -567,13 +574,14 @@ def _java_inline_members(text):
     yield member_start, len(text)
 
 
-def _java_strip_inline_constructors(text, class_name):
+def _java_strip_inline_constructors(text, class_name, next_line=""):
     spans = []
     for start, end in _java_inline_members(text):
         candidate = _java_constructor_match(text[start:end])
-        if (candidate and candidate.group(1) == class_name
-                and text[start + candidate.end():end].lstrip().startswith("{")):
-            spans.append((start, start + candidate.end()))
+        if candidate and candidate[0] == class_name:
+            tail = text[start + candidate[2]:end].lstrip()
+            if tail.startswith("{") or (not tail and next_line.lstrip().startswith("{")):
+                spans.append((start, start + candidate[2]))
     if not spans:
         return text
     chars = list(text)
@@ -608,12 +616,12 @@ def _scan_java(text, lang, rel_path=None):
                 open_brace = line.find("{", m.end())
                 if open_brace >= 0:
                     candidate = _java_constructor_match(line[open_brace + 1:])
-                    if candidate and candidate.group(1) == m.group(1):
+                    if candidate and candidate[0] == m.group(1):
                         items.append((
                             idx, depth + 1,
-                            SymbolRec("method", candidate.group(1),
-                                      f"{qual}.{candidate.group(1)}", qual, idx, 0,
-                                      candidate.group(2).strip()),
+                            SymbolRec("method", candidate[0],
+                                      f"{qual}.{candidate[0]}", qual, idx, 0,
+                                      candidate[1].strip()),
                         ))
             depth += line.count("{") - line.count("}")
             while classes and depth <= classes[-1][0]:
@@ -638,13 +646,13 @@ def _scan_java(text, lang, rel_path=None):
                 and depth == classes[-1][0] + 1):
             candidate = _java_constructor_match(line)
             if (candidate
-                    and candidate.group(1) == classes[-1][1].rsplit(".", 1)[-1]):
+                    and candidate[0] == classes[-1][1].rsplit(".", 1)[-1]):
                 ctor = candidate
         if ctor:
             parent = classes[-1][1]
-            qual = f"{parent}.{ctor.group(1)}"
-            items.append((idx, depth, SymbolRec("method", ctor.group(1), qual, parent,
-                                                idx, 0, ctor.group(2).strip())))
+            qual = f"{parent}.{ctor[0]}"
+            items.append((idx, depth, SymbolRec("method", ctor[0], qual, parent,
+                                                idx, 0, ctor[1].strip())))
             depth += line.count("{") - line.count("}")
             while classes and depth <= classes[-1][0]:
                 classes.pop()
@@ -662,7 +670,9 @@ def _scan_java(text, lang, rel_path=None):
         if brace >= 0:
             line = line[brace + 1:]
             if class_match:
-                line = _java_strip_inline_constructors(line, class_match.group(1))
+                next_line = lines[idx] if idx < len(lines) else ""
+                line = _java_strip_inline_constructors(
+                    line, class_match.group(1), next_line)
         for callee in _calls_in_line(line, JAVA_EXCLUDE):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
