@@ -183,7 +183,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         for row in store.conn.execute(
                 "SELECT lang, COUNT(*) AS n FROM files GROUP BY lang ORDER BY lang"):
             report.languages[row["lang"]] = row["n"]
-        build_succeeded = True
+        # A force build starts with an empty temporary DB. Do not publish a
+        # partial replacement when discovery or a file read was incomplete.
+        build_succeeded = scan_config_complete
     finally:
         store.close()
         if temporary_db is not None:
