@@ -297,6 +297,71 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_auto_provider_change_replaces_unchanged_file_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "module.py"
+            source.write_text("def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+
+            quick_scan = FileScan(
+                "python", "module",
+                [SymbolRec("function", "quick_marker", "module.quick_marker", "", 1, 1, "")],
+            )
+            deep_scan = FileScan(
+                "python", "module",
+                [SymbolRec("function", "deep_marker", "module.deep_marker", "", 1, 1, "")],
+            )
+
+            with patch("codegraph.scanner.deep.supports", return_value=False), \
+                    patch("codegraph.scanner.quick.quick_scan", return_value=quick_scan):
+                build_index(cfg)
+
+            with patch("codegraph.scanner.deep.supports", return_value=True), \
+                    patch("codegraph.scanner.deep.deep_scan", return_value=deep_scan) as scan:
+                report = build_index(cfg)
+
+            self.assertEqual(report.files_changed, 1)
+            self.assertEqual(report.files_skipped, 0)
+            scan.assert_called_once_with(
+                "def target():\n    return 1\n", "python", "module.py"
+            )
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.symbol_by_qualname("module.deep_marker"))
+                self.assertIsNone(store.symbol_by_qualname("module.quick_marker"))
+            finally:
+                store.close()
+
+    def test_unrelated_provider_change_skips_unchanged_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "module.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            quick_scan = FileScan(
+                "python", "module",
+                [SymbolRec("function", "quick_marker", "module.quick_marker", "", 1, 1, "")],
+            )
+
+            def no_deep_provider(lang):
+                return False
+
+            def javascript_only_provider(lang):
+                return lang == "javascript"
+
+            with patch("codegraph.scanner.deep.supports", side_effect=no_deep_provider), \
+                    patch("codegraph.scanner.quick.quick_scan", return_value=quick_scan):
+                build_index(cfg)
+
+            with patch("codegraph.scanner.deep.supports", side_effect=javascript_only_provider), \
+                    patch("codegraph.scanner.quick.quick_scan", return_value=quick_scan) as scan:
+                report = build_index(cfg)
+
+            self.assertEqual(report.files_changed, 0)
+            self.assertEqual(report.files_skipped, 1)
+            scan.assert_not_called()
+
     def test_config_change_retries_file_after_transient_read_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

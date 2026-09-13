@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import ProjectConfig
 from .resolver import resolve_all
-from .scanner import languages, scan_text
+from .scanner import deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
@@ -34,8 +34,20 @@ def _digest(data: bytes) -> str:
 
 def _scan_config(cfg: ProjectConfig) -> str:
     """Serialize settings that affect per-file scan payloads."""
+    language_ids = set(languages.EXTENSIONS.values())
+    language_ids.update(cfg.language_map.values())
+    if cfg.engine == "quick":
+        providers = {lang: "quick" for lang in language_ids}
+    elif cfg.engine == "deep":
+        providers = {lang: "deep" for lang in language_ids}
+    else:
+        providers = {
+            lang: "deep" if deep.supports(lang) else "quick"
+            for lang in language_ids
+        }
     return json.dumps(
-        {"engine": cfg.engine, "language_map": cfg.language_map},
+        {"engine": cfg.engine, "language_map": cfg.language_map,
+         "providers": providers},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -62,7 +74,22 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     store = IndexStore(str(db))
     store.set_meta("root", str(Path(cfg.root).resolve()))
     scan_config = _scan_config(cfg)
-    scan_config_changed = store.get_meta("scan_config") != scan_config
+    current_scan_config = json.loads(scan_config)
+    previous_scan_config = store.get_meta("scan_config")
+    try:
+        previous_scan_config = json.loads(previous_scan_config or "{}")
+    except json.JSONDecodeError:
+        previous_scan_config = {}
+    if not isinstance(previous_scan_config, dict):
+        previous_scan_config = {}
+    scan_settings_changed = (
+        previous_scan_config.get("engine") != current_scan_config["engine"] or
+        previous_scan_config.get("language_map") != current_scan_config["language_map"]
+    )
+    previous_providers = previous_scan_config.get("providers", {})
+    if not isinstance(previous_providers, dict):
+        previous_providers = {}
+    current_providers = current_scan_config["providers"]
     root = Path(cfg.root)
 
     discovery_complete = True
@@ -97,15 +124,18 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             digest = _digest(data)
             prev = store.file_by_path(posix)
 
-            if not force and cfg.incremental and not scan_config_changed:
-                if prev is not None and prev["digest"] == digest:
-                    report.files_skipped += 1
-                    continue
-
             lang = languages.lang_for(posix, cfg.language_map)
             if lang is None:  # race with discovery config changes
                 scan_config_complete = False
                 continue
+
+            if not force and cfg.incremental and not scan_settings_changed:
+                if (prev is not None and prev["digest"] == digest and
+                        prev["lang"] == lang and
+                        previous_providers.get(lang) == current_providers.get(lang)):
+                    report.files_skipped += 1
+                    continue
+
             text = data.decode("utf-8-sig", errors="replace")
             # Mark before scanning so a later scan failure preserves a retry
             # marker for payloads committed earlier in this run.
