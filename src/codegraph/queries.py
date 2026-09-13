@@ -141,16 +141,25 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
         # work. Relative imports (module ".") count too when the importing
         # file lives in the same package.
         extra = store.conn.execute(
-            "SELECT f.path, i.module, i.line "
-            "FROM imports i JOIN files f ON f.id = i.file_id "
-            "JOIN files impf ON impf.id = i.file_id "
-            "WHERE (instr(i.names, ?) > 0 OR "
-            "replace(i.names, char(92) || 't', ' ') GLOB ?) AND ("
-            "  i.module = ? "
-            "  OR (i.module GLOB '.*' AND (impf.module = ? OR ("
-            "    substr(impf.module, 1, length(?) + 1) = ? || '.'"
-            "  )))"
-            ") ORDER BY f.path, i.line LIMIT ?",
+            "WITH matched AS ("
+            "  SELECT i.id, i.file_id, i.module, i.line "
+            "  FROM imports i JOIN files impf ON impf.id = i.file_id "
+            "  WHERE (instr(i.names, ?) > 0 OR "
+            "  replace(i.names, char(92) || 't', ' ') GLOB ?) AND ("
+            "    i.module = ? "
+            "    OR (i.module GLOB '.*' AND (impf.module = ? OR ("
+            "      substr(impf.module, 1, length(?) + 1) = ? || '.'"
+            "    )))"
+            "  )"
+            ") "
+            "SELECT f.path, m.module, m.line "
+            "FROM matched m JOIN files f ON f.id = m.file_id "
+            "WHERE NOT EXISTS ("
+            "  SELECT 1 FROM matched earlier "
+            "  WHERE earlier.file_id = m.file_id "
+            "    AND (earlier.line < m.line OR "
+            "         (earlier.line = m.line AND earlier.id < m.id))"
+            ") ORDER BY f.path, m.line LIMIT ?",
             (f'"{name}"', f'*"{name}[ ]*as[ ]*"*', base, base, base, base, limit),
         )
         for r in extra:

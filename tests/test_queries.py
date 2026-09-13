@@ -168,6 +168,34 @@ class QueryTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_dependents_limit_deduplicates_member_import_rows(self):
+        """Repeated member imports must not consume dependent-file limit slots."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "pricing.py").write_text(
+                "def price(item):\n    return item\n", encoding="utf-8")
+            (root / "duplicate.py").write_text(
+                "from pkg import pricing\nfrom pkg import pricing\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "from pkg import pricing\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "pkg.pricing", limit=2)
+                self.assertEqual(
+                    [row["path"] for row in rows],
+                    ["duplicate.py", "other.py"],
+                )
+            finally:
+                store.close()
+
     def test_dependents_via_aliased_member_import_with_whitespace(self):
         """dependents() must allow flexible whitespace around ``as``."""
         with tempfile.TemporaryDirectory() as tmp:
