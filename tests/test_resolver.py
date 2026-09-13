@@ -1002,6 +1002,76 @@ class ResolverTest(unittest.TestCase):
         rfid = self._file_id("rustx/main.rs")
         self.assertEqual(resolve_module(self.store, rfid, "lib"), self._file_id("rustx/lib.rs"))
 
+    def test_python_stub_module_resolution(self):
+        """Python imports resolve modules and packages that only have .pyi files."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                "import api\n"
+                "from stubs import models\n"
+                "api.fetch()\n"
+                "models.User()\n",
+                encoding="utf-8",
+            )
+            (root / "api.pyi").write_text(
+                "def fetch() -> None: ...\n", encoding="utf-8")
+            (root / "ambiguous.pyi").write_text(
+                "def from_stub() -> None: ...\n", encoding="utf-8")
+            ambiguous = root / "ambiguous"
+            ambiguous.mkdir()
+            (ambiguous / "__init__.py").write_text(
+                "def from_package() -> None: ...\n", encoding="utf-8")
+            stubs = root / "stubs"
+            stubs.mkdir()
+            (stubs / "__init__.pyi").write_text(
+                "from . import models\n", encoding="utf-8")
+            (stubs / "models.pyi").write_text(
+                "class User: ...\n", encoding="utf-8")
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "foo__init__.pyi").write_text(
+                "from . import sibling\n\n"
+                "def expose() -> None: sibling.deliver()\n",
+                encoding="utf-8",
+            )
+            (pkg / "sibling.pyi").write_text(
+                "def deliver() -> None: ...\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.py")["id"]
+                self.assertEqual(
+                    resolve_module(store, fid, "api"),
+                    store.file_by_path("api.pyi")["id"],
+                )
+                self.assertEqual(
+                    resolve_module(store, fid, "stubs"),
+                    store.file_by_path("stubs/__init__.pyi")["id"],
+                )
+                self.assertEqual(
+                    resolve_module(store, fid, "ambiguous"),
+                    store.file_by_path("ambiguous/__init__.py")["id"],
+                )
+                api_call = resolve_callee(store, fid, "api.fetch")
+                self.assertEqual(
+                    store.symbol_by_id(api_call).qualname, "api.fetch"
+                )
+                models_call = resolve_callee(store, fid, "models.User")
+                self.assertEqual(
+                    store.symbol_by_id(models_call).qualname, "stubs.models.User"
+                )
+                foo_id = store.file_by_path("pkg/foo__init__.pyi")["id"]
+                sibling_call = resolve_callee(store, foo_id, "sibling.deliver")
+                self.assertEqual(
+                    store.symbol_by_id(sibling_call).qualname,
+                    "pkg.sibling.deliver",
+                )
+            finally:
+                store.close()
+
     def test_scoped_resolution_is_atomic(self):
         statements = []
         self.store.conn.set_trace_callback(statements.append)

@@ -155,7 +155,7 @@ def _imported_files(store: IndexStore, file_id: int):
                 # a file inside pkg/ has module "pkg.cart" (package "pkg");
                 # an __init__ file IS the package ("pkg") and keeps its own
                 # module as the base for the first relative level
-                if file["path"].endswith("__init__.py"):
+                if Path(file["path"]).name in ("__init__.py", "__init__.pyi"):
                     base_parts = mod_parts
                 else:
                     base_parts = mod_parts[:-1]
@@ -958,17 +958,26 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
             parts = rel_name.split(".") if rel_name else []
             target = base.joinpath(*parts)
             cands = []
+            cands.extend(
+                target / f"__init__{ext}" for ext in _EXT_BY_LANG["python"]
+            )
             if target.name:
-                cands.append(target.with_suffix(".py"))
-            cands.append(target / "__init__.py")
+                cands.extend(
+                    target.with_suffix(ext) for ext in _EXT_BY_LANG["python"]
+                )
         else:
             parts = module_text.split(".")
             cands = []
             for up in [file_dir, *file_dir.parents]:
                 if not _is_within(root / up, root):
                     break
-                cands.append(up.joinpath(*parts).with_suffix(".py"))
-                cands.append(up.joinpath(*parts) / "__init__.py")
+                target = up.joinpath(*parts)
+                cands.extend(
+                    target / f"__init__{ext}" for ext in _EXT_BY_LANG["python"]
+                )
+                cands.extend(
+                    target.with_suffix(ext) for ext in _EXT_BY_LANG["python"]
+                )
         return [rel for cand in cands if (rel := rel_of(cand)) is not None]
 
     # --- rust: std/core/alloc are external; crate/self/super are internal --
