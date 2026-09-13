@@ -60,6 +60,27 @@ class ExportTest(unittest.TestCase):
                     dot,
                 )
 
+    def test_dot_unresolved_call_target_has_a_distinct_node_id(self):
+        call = self.store.conn.execute(
+            "SELECT id, caller_id FROM calls WHERE callee_id IS NULL "
+            "AND caller_id IS NOT NULL LIMIT 1"
+        ).fetchone()
+        self.assertIsNotNone(call)
+
+        self.store.conn.execute(
+            "UPDATE calls SET callee = 'n1' WHERE id = ?", (call["id"],)
+        )
+        dot = export_dot(self.store)
+        target = f'u{call["id"]}'
+
+        # The fixture's first symbol is the real generated n1 node.
+        self.assertIn("n1 [", dot)
+        self.assertIn(f'  {target} [label="n1"];', dot)
+        self.assertIn(
+            f'  n{call["caller_id"]} -> {target} [style=dashed];', dot
+        )
+        self.assertNotIn(f'-> "n1" [style=dashed];', dot)
+
     def test_json_structure(self):
         data = export_json(self.store)
         self.assertEqual(
