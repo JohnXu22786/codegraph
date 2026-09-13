@@ -38,6 +38,25 @@ class LanguageRegistryTest(unittest.TestCase):
         self.assertEqual(languages.lang_for("notes.md", cfg.language_map), "markdown")
         self.assertIsNone(languages.lang_for("notes.md"))
 
+    def test_package_after_leading_comments_and_build_tags(self):
+        go = "//go:build linux\n// +build linux\n\npackage service\n"
+        self.assertEqual(
+            languages.module_of("cmd/service.go", "go", go), "service"
+        )
+
+        java = "/* generated source */\n// license\npackage com.example.service;\n"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
+    def test_package_text_inside_leading_block_comment_is_ignored(self):
+        java = "/*\npackage not.the.real.package;\n*/\npackage com.example.real;\n"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.real",
+        )
+
 
 class WalkTest(unittest.TestCase):
     def test_default_discovery(self):

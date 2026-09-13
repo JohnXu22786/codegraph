@@ -22,7 +22,25 @@ EXTENSIONS = {
     ".rs": "rust",
 }
 
-_PKG_STMT = re.compile(r"^\s*package\s+([\w.]+)\s*;?")
+_PKG_STMT = re.compile(
+    r"^[ \t]*package[ \t]+([\w.]+)[ \t]*;?",
+    re.MULTILINE,
+)
+_COMMENTS = re.compile(r"//[^\r\n]*|/\*.*?\*/", re.DOTALL)
+
+
+def _package_name(text):
+    """Return a Go/Java package declaration, ignoring leading comments."""
+    if not text:
+        return None
+    # Keep line breaks intact so the multiline package anchor still works.
+    source = _COMMENTS.sub(
+        lambda m: "".join("\n" if c == "\n" else "\r" if c == "\r" else " "
+                           for c in m.group(0)),
+        text,
+    )
+    match = _PKG_STMT.search(source)
+    return match.group(1) if match else None
 
 
 def lang_for(rel_path, overrides=None) -> "str | None":
@@ -44,8 +62,7 @@ def module_of(rel_path, lang, text="") -> str:
     """
     if not rel_path:
         if lang in ("go", "java"):
-            m = _PKG_STMT.search(text)
-            return m.group(1) if m else ""
+            return _package_name(text) or ""
         return ""
     rel = Path(rel_path)
     if lang == "python":
@@ -54,9 +71,7 @@ def module_of(rel_path, lang, text="") -> str:
             parts = parts[:-1]
         return ".".join(parts) if parts else ""
     if lang == "go":
-        m = _PKG_STMT.search(text)
-        return m.group(1) if m else rel.with_suffix("").as_posix()
+        return _package_name(text) or rel.with_suffix("").as_posix()
     if lang == "java":
-        m = _PKG_STMT.search(text)
-        return m.group(1) if m else rel.with_suffix("").as_posix()
+        return _package_name(text) or rel.with_suffix("").as_posix()
     return rel.with_suffix("").as_posix()
