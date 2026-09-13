@@ -265,10 +265,81 @@ class QuickGoJavaRustTest(unittest.TestCase):
 
     def test_rust_public_mod_imports(self):
         src = "pub mod shared;\npub(crate) mod internal;\n"
-        imports = quick.quick_scan(src, "rust").imports
+        scan = quick.quick_scan(src, "rust")
+        imports = scan.imports
         self.assertEqual(
             [(item.module, item.kind) for item in imports],
             [("shared", "mod"), ("internal", "mod")],
+        )
+
+    def test_rust_public_use_imports(self):
+        src = "pub use crate::shared::item;\npub(crate) use self::internal::item;\n"
+        scan = quick.quick_scan(src, "rust")
+        imports = scan.imports
+        self.assertEqual(
+            [(item.module, item.kind) for item in imports],
+            [("crate::shared::item", "use"), ("self::internal::item", "use")],
+        )
+
+    def test_rust_public_use_trees_import_each_path(self):
+        src = (
+            "pub use {crate::shared::Item, crate::other::Other};\n"
+            "pub(crate) use crate::{internal::Item, shared::Other};\n"
+        )
+        imports = quick.quick_scan(src, "rust").imports
+        self.assertEqual(
+            [(item.module, item.kind) for item in imports],
+            [
+                ("crate::shared::Item", "use"),
+                ("crate::other::Other", "use"),
+                ("crate::internal::Item", "use"),
+                ("crate::shared::Other", "use"),
+            ],
+        )
+
+    def test_rust_public_use_tree_ignores_comments(self):
+        src = (
+            "pub use crate::{\n"
+            "    shared::Item, // first re-export\n"
+            "    other::Other, /* second; re-export */\n"
+            "};\n"
+        )
+        imports = quick.quick_scan(src, "rust").imports
+        self.assertEqual(
+            [item.module for item in imports],
+            ["crate::shared::Item", "crate::other::Other"],
+        )
+
+    def test_rust_use_paths_ignore_raw_strings_and_comment_gaps(self):
+        src = (
+            'const TEXT: &str = r#"\n'
+            'use crate::fake;\n'
+            'mod fake;\n'
+            'fn fake() {}\n'
+            '"#;\n'
+            'use crate::real /* path comment */ :: item;\n'
+        )
+        scan = quick.quick_scan(src, "rust")
+        imports = scan.imports
+        self.assertEqual(
+            [(item.module, item.kind) for item in imports],
+            [("crate::real::item", "use")],
+        )
+        self.assertNotIn("fake", {item.name for item in scan.symbols})
+
+    def test_rust_use_aliases_are_preserved(self):
+        src = (
+            "use crate::a::foo as bar;\n"
+            "pub use crate::b::{baz as qux, plain};\n"
+        )
+        imports = quick.quick_scan(src, "rust").imports
+        self.assertEqual(
+            [(item.module, item.names) for item in imports],
+            [
+                ("crate::a::foo", ["bar"]),
+                ("crate::b::baz", ["qux"]),
+                ("crate::b::plain", []),
+            ],
         )
 
     def test_get_set_are_valid_method_names(self):

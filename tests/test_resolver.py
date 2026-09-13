@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from codegraph.builder import build_index
 from codegraph.config import load_config
@@ -152,8 +153,8 @@ class ResolverTest(unittest.TestCase):
             (src / "lib.rs").write_text(
                 "pub mod child;\n"
                 "pub mod shared;\n"
-                "use crate::shared::shared_fn;\n"
-                "use self::child::child_fn;\n"
+                "pub use crate::shared::{shared_fn};\n"
+                "pub(crate) use self::child::{child_fn};\n"
                 "use crate::root_fn;\n"
                 "fn root_fn() {}\n"
                 "fn call() { shared_fn(); child_fn(); root_fn(); }\n",
@@ -253,6 +254,533 @@ class ResolverTest(unittest.TestCase):
                     store.symbol_by_id(call)["qualname"],
                     "src/child/nested.nested_fn",
                 )
+            finally:
+                store.close()
+
+    def test_rust_nested_main_and_lib_files_are_modules(self):
+        """Only the actual crate root owns crate-relative paths."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            (src / "foo" / "main").mkdir(parents=True)
+            (src / "bar" / "lib").mkdir(parents=True)
+            (src / "lib.rs").write_text(
+                "mod foo;\n"
+                "mod bar;\n"
+                "fn root_fn() {}\n",
+                encoding="utf-8",
+            )
+            (src / "foo.rs").write_text("mod main;\n", encoding="utf-8")
+            (src / "foo" / "main.rs").write_text(
+                "mod child;\n"
+                "use crate::root_fn;\n"
+                "fn nested_main_fn() { root_fn(); }\n",
+                encoding="utf-8",
+            )
+            (src / "foo" / "main" / "child.rs").write_text(
+                "use crate::root_fn;\n", encoding="utf-8")
+            (src / "bar.rs").write_text("mod lib;\n", encoding="utf-8")
+            (src / "bar" / "lib.rs").write_text(
+                "mod child;\n"
+                "use crate::root_fn;\n",
+                encoding="utf-8",
+            )
+            (src / "bar" / "lib" / "child.rs").write_text(
+                "use crate::root_fn;\n", encoding="utf-8")
+            legacy = root / "legacy"
+            legacy.mkdir()
+            (legacy / "main.rs").write_text(
+                "mod lib;\nfn root_fn() {}\n", encoding="utf-8")
+            (legacy / "lib.rs").write_text(
+                "use crate::root_fn;\n", encoding="utf-8")
+            auto_bin = src / "bin" / "auto"
+            auto_bin.mkdir(parents=True)
+            (auto_bin / "main.rs").write_text(
+                "mod child;\n"
+                "use crate::bin_fn;\n"
+                "fn bin_fn() {}\n",
+                encoding="utf-8",
+            )
+            (auto_bin / "child.rs").write_text(
+                "use crate::bin_fn;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                imports = {
+                    (store.file_by_id(row["file_id"])["path"], row["module"]):
+                    store.file_by_id(row["target_id"])["path"]
+                    for row in store.conn.execute(
+                        "SELECT file_id, module, target_id FROM imports "
+                        "WHERE target_id IS NOT NULL"
+                    )
+                }
+                self.assertEqual(
+                    imports[("src/foo/main.rs", "child")],
+                    "src/foo/main/child.rs",
+                )
+                self.assertEqual(
+                    imports[("src/foo/main.rs", "crate::root_fn")],
+                    "src/lib.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bar/lib.rs", "child")],
+                    "src/bar/lib/child.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bar/lib.rs", "crate::root_fn")],
+                    "src/lib.rs",
+                )
+                self.assertEqual(
+                    imports[("legacy/lib.rs", "crate::root_fn")],
+                    "legacy/main.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bin/auto/main.rs", "child")],
+                    "src/bin/auto/child.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bin/auto/main.rs", "crate::bin_fn")],
+                    "src/bin/auto/main.rs",
+                )
+            finally:
+                store.close()
+
+    def test_rust_cargo_custom_roots_resolve_modules_and_items(self):
+        """Cargo path overrides define roots even outside conventional names."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir(parents=True)
+            (root / "src" / "bin" / "tools").mkdir(parents=True)
+            (root / "examples" / "nested").mkdir(parents=True)
+            (root / "Cargo.toml").write_text(
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"
+                "autobins = false\n\n"
+                "[lib]\npath = \"src/entry.rs\"\n\n"
+                "[[bin]]\nname = \"tool\"\n"
+                "path = \"src/bin/tools/custom.rs\"\n\n"
+                "[[example]]\nname = \"demo-example\"\n"
+                "path = \"examples/nested/demo.rs\"\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "entry.rs").write_text(
+                "mod child;\n"
+                "use crate::lib_fn;\n"
+                "fn lib_fn() {}\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "child.rs").write_text(
+                "use crate::lib_fn;\n", encoding="utf-8")
+            (root / "src" / "bin" / "tools" / "custom.rs").write_text(
+                "mod nested;\n"
+                "use crate::bin_fn;\n"
+                "fn bin_fn() {}\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "bin" / "tools" / "nested.rs").write_text(
+                "use crate::bin_fn;\n", encoding="utf-8")
+            (root / "src" / "main.rs").write_text(
+                "mod main_child;\n"
+                "use crate::unconfigured;\nfn unconfigured() {}\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "main_child.rs").write_text(
+                "fn child_fn() {}\n", encoding="utf-8")
+            (root / "examples" / "nested" / "demo.rs").write_text(
+                "use crate::example_fn;\nfn example_fn() {}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                imports = {
+                    (store.file_by_id(row["file_id"])["path"], row["module"]):
+                    store.file_by_id(row["target_id"])["path"]
+                    for row in store.conn.execute(
+                        "SELECT file_id, module, target_id FROM imports "
+                        "WHERE target_id IS NOT NULL"
+                    )
+                }
+                self.assertEqual(
+                    imports[("src/entry.rs", "child")],
+                    "src/child.rs",
+                )
+                self.assertEqual(
+                    imports[("src/entry.rs", "crate::lib_fn")],
+                    "src/entry.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bin/tools/custom.rs", "nested")],
+                    "src/bin/tools/nested.rs",
+                )
+                self.assertEqual(
+                    imports[("src/bin/tools/custom.rs", "crate::bin_fn")],
+                    "src/bin/tools/custom.rs",
+                )
+                self.assertIsNone(
+                    store.find_import(module="crate::unconfigured")["target_id"]
+                )
+                main_id = store.file_by_path("src/main.rs")["id"]
+                row = store.conn.execute(
+                    "SELECT target_id FROM imports WHERE file_id = ? "
+                    "AND module = ?", (main_id, "main_child")
+                ).fetchone()
+                self.assertIsNone(row["target_id"])
+                example = store.find_import(module="crate::example_fn")
+                self.assertEqual(
+                    store.file_by_id(example["target_id"])["path"],
+                    "examples/nested/demo.rs",
+                )
+            finally:
+                store.close()
+
+    def test_rust_cargo_fallback_reads_multiline_custom_root(self):
+        """The Python 3.10 fallback handles valid multiline TOML strings."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            src.mkdir()
+            (root / "Cargo.toml").write_text(
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n"
+                "[lib]\npath = \"\"\"src/entry.rs\"\"\"\n",
+                encoding="utf-8",
+            )
+            src.joinpath("entry.rs").write_text(
+                "use crate::root_fn;\nfn root_fn() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            with patch("codegraph.resolver.tomllib", None):
+                build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="crate::root_fn")
+                self.assertEqual(
+                    store.file_by_id(row["target_id"])["path"],
+                    "src/entry.rs",
+                )
+            finally:
+                store.close()
+
+    def test_rust_virtual_workspace_does_not_define_roots(self):
+        """A workspace-only Cargo manifest is not a package target."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "Cargo.toml").write_text(
+                "[workspace]\nmembers = [\"member\"]\n",
+                encoding="utf-8",
+            )
+            (root / "src" / "lib.rs").write_text(
+                "use crate::unconfigured;\nfn unconfigured() {}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNone(
+                    store.find_import(module="crate::unconfigured")["target_id"]
+                )
+            finally:
+                store.close()
+
+    def test_rust_cargo_root_changes_re_resolve_incrementally(self):
+        """Changing Cargo root metadata must invalidate old import edges."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            src.mkdir()
+            manifest = root / "Cargo.toml"
+            manifest.write_text(
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n"
+                "[lib]\npath = \"src/entry.rs\"\n",
+                encoding="utf-8",
+            )
+            (src / "entry.rs").write_text(
+                "use crate::root_fn;\nfn root_fn() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="crate::root_fn")
+                self.assertEqual(store.file_by_id(row["target_id"])["path"],
+                                 "src/entry.rs")
+            finally:
+                store.close()
+
+            (src / "other.rs").write_text(
+                "mod entry;\nfn root_fn() {}\n", encoding="utf-8")
+            manifest.write_text(
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n"
+                "[lib]\npath = \"src/other.rs\"\n",
+                encoding="utf-8",
+            )
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="crate::root_fn")
+                self.assertEqual(store.file_by_id(row["target_id"])["path"],
+                                 "src/other.rs")
+            finally:
+                store.close()
+
+    def test_rust_path_attribute_resolves_custom_module_file(self):
+        """A path attribute changes the file selected by a mod declaration."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            src.mkdir()
+            (root / "legacy").mkdir()
+            (root / "legacy" / "main.rs").write_text(
+                "fn internal_fn() {}\n", encoding="utf-8")
+            (src / "parent.rs").write_text(
+                "#[path = \"alt/child.rs\"] mod child;\n",
+                encoding="utf-8")
+            (src / "alt").mkdir()
+            (src / "alt" / "child.rs").write_text(
+                "use super::super::root_fn;\n", encoding="utf-8")
+            (src / "lib.rs").write_text(
+                "#[path = \"../legacy/main.rs\"] mod implementation;\n"
+                "mod parent;\n"
+                "use crate::implementation::internal_fn;\n"
+                "fn root_fn() {}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                imports = {
+                    (store.file_by_id(row["file_id"])["path"], row["module"]):
+                    store.file_by_id(row["target_id"])["path"]
+                    for row in store.conn.execute(
+                        "SELECT file_id, module, target_id FROM imports "
+                        "WHERE target_id IS NOT NULL"
+                    )
+                }
+                self.assertEqual(
+                    imports[("src/lib.rs", "implementation")],
+                    "legacy/main.rs",
+                )
+                self.assertEqual(
+                    imports[("src/lib.rs", "crate::implementation::internal_fn")],
+                    "legacy/main.rs",
+                )
+                self.assertEqual(
+                    imports[("src/parent.rs", "child")],
+                    "src/alt/child.rs",
+                )
+                self.assertEqual(
+                    imports[("src/alt/child.rs", "super::super::root_fn")],
+                    "src/lib.rs",
+                )
+            finally:
+                store.close()
+
+    def test_rust_path_attribute_survives_comments_and_blank_lines(self):
+        """Comments cannot cancel or invent a pending path attribute."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            (src / "alt").mkdir(parents=True)
+            src.joinpath("lib.rs").write_text(
+                "/* #[path = \"wrong.rs\"] */\n"
+                "#[path = \"alt/child.rs\"]\n"
+                "\n"
+                "// the attribute applies across comments\n"
+                "mod child;\n",
+                encoding="utf-8",
+            )
+            src.joinpath("alt", "child.rs").write_text(
+                "fn child_fn() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="child")
+                self.assertEqual(
+                    store.file_by_id(row["target_id"])["path"],
+                    "src/alt/child.rs",
+                )
+            finally:
+                store.close()
+
+    def test_rust_edition_2021_bare_use_prefers_current_module(self):
+        """Rust 2018+ resolves a bare use path from the current module."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            (src / "child" / "inner").mkdir(parents=True)
+            (root / "Cargo.toml").write_text(
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"
+                "edition = \"2021\"\n",
+                encoding="utf-8",
+            )
+            src.joinpath("lib.rs").write_text(
+                "mod child;\nmod inner;\n", encoding="utf-8")
+            src.joinpath("child.rs").write_text(
+                "mod inner;\nuse inner::foo;\nfn call() { foo(); }\n",
+                encoding="utf-8",
+            )
+            src.joinpath("inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+            src.joinpath("child", "inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="inner::foo")
+                self.assertEqual(
+                    store.file_by_id(row["target_id"])["path"],
+                    "src/child/inner.rs",
+                )
+            finally:
+                store.close()
+
+    def test_rust_use_alias_resolves_call_to_source_symbol(self):
+        """An aliased use binds the alias to the source item."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            src.mkdir()
+            src.joinpath("lib.rs").write_text(
+                "mod a;\nuse crate::a::foo as bar;\n"
+                "fn call() { bar(); }\n",
+                encoding="utf-8",
+            )
+            src.joinpath("a.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("src/lib.rs")["id"]
+                symbol_id = resolve_callee(store, file_id, "bar")
+                self.assertEqual(
+                    store.symbol_by_id(symbol_id)["qualname"],
+                    "src/a.foo",
+                )
+            finally:
+                store.close()
+
+    def test_ignored_nested_cargo_manifest_does_not_hide_conventional_root(self):
+        """Excluded package metadata must not change in-scope Rust roots."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            ignored = root / "ignored"
+            src.mkdir()
+            ignored.mkdir()
+            src.joinpath("lib.rs").write_text(
+                "use crate::root_fn;\nfn root_fn() {}\n",
+                encoding="utf-8",
+            )
+            ignored.joinpath("Cargo.toml").write_text(
+                "[package]\nname = \"ignored\"\nversion = \"0.1.0\"\n"
+                "[lib]\npath = \"entry.rs\"\n",
+                encoding="utf-8",
+            )
+            ignored.joinpath("entry.rs").write_text(
+                "fn root_fn() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            cfg.exclude = list(cfg.exclude) + ["ignored"]
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="crate::root_fn")
+                self.assertEqual(
+                    store.file_by_id(row["target_id"])["path"],
+                    "src/lib.rs",
+                )
+            finally:
+                store.close()
+
+    def test_rust_use_does_not_resolve_undeclared_module_file(self):
+        """A matching file is not a module until a mod declaration reaches it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            src.mkdir()
+            (src / "lib.rs").write_text(
+                "use crate::orphan::orphan_fn;\n"
+                "use crate::missing::root_fn;\n"
+                "fn root_fn() {}\n",
+                encoding="utf-8",
+            )
+            (src / "orphan.rs").write_text(
+                "fn orphan_fn() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNone(
+                    store.find_import(module="crate::orphan::orphan_fn")["target_id"]
+                )
+                self.assertIsNone(
+                    store.find_import(module="crate::missing::root_fn")["target_id"]
+                )
+            finally:
+                store.close()
+
+    def test_rust_mod_graph_changes_re_resolve_unchanged_descendants(self):
+        """Changing mod reachability refreshes imports in unchanged modules."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            src.mkdir()
+            manifest = root / "Cargo.toml"
+            manifest.write_text(
+                "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n"
+                "[lib]\npath = \"src/lib.rs\"\n",
+                encoding="utf-8",
+            )
+            lib = src / "lib.rs"
+            lib.write_text("fn root_fn() {}\n", encoding="utf-8")
+            child = src / "child.rs"
+            child.write_text(
+                "use crate::root_fn;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNone(
+                    store.find_import(module="crate::root_fn")["target_id"]
+                )
+            finally:
+                store.close()
+
+            lib.write_text("mod child;\nfn root_fn() {}\n", encoding="utf-8")
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="crate::root_fn")
+                self.assertEqual(store.file_by_id(row["target_id"])["path"],
+                                 "src/lib.rs")
             finally:
                 store.close()
 

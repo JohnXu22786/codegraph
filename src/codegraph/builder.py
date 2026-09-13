@@ -34,7 +34,55 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _scan_config(cfg: ProjectConfig) -> str:
+def _cargo_manifest_paths(root: Path, source_paths=None) -> list:
+    """Return Cargo manifests on the ancestor paths of indexed sources."""
+    root = Path(root).resolve()
+    if source_paths is None:
+        try:
+            return sorted(root.rglob("Cargo.toml"))
+        except OSError:
+            return []
+
+    manifests = set()
+    for source in source_paths:
+        path = Path(source)
+        full_path = path if path.is_absolute() else root / path
+        directory = full_path.parent
+        while True:
+            try:
+                directory.relative_to(root)
+            except ValueError:
+                break
+            candidate = directory / "Cargo.toml"
+            if candidate.is_file():
+                manifests.add(candidate)
+            if directory == root:
+                break
+            directory = directory.parent
+    return sorted(manifests)
+
+
+def _cargo_manifest_state(root: Path, source_paths=None) -> dict:
+    """Return content digests for Cargo manifests affecting Rust roots."""
+    root = Path(root).resolve()
+    manifests = _cargo_manifest_paths(root, source_paths)
+
+    state = {}
+    for manifest in manifests:
+        if not manifest.is_file():
+            continue
+        try:
+            data = manifest.read_bytes()
+        except OSError:
+            digest = None
+        else:
+            digest = _digest(data)
+        state[manifest.relative_to(root).as_posix()] = digest
+    return state
+
+
+def _scan_config(cfg: ProjectConfig, include_cargo=True,
+                 cargo_manifest_paths=None) -> str:
     """Serialize settings that affect per-file scan payloads."""
     language_ids = set(languages.EXTENSIONS.values())
     language_ids.update(cfg.language_map.values())
@@ -49,7 +97,14 @@ def _scan_config(cfg: ProjectConfig) -> str:
         }
     return json.dumps(
         {"engine": cfg.engine, "language_map": cfg.language_map,
-         "providers": providers},
+         "providers": providers,
+        # Cargo roots affect resolution even though they do not affect the
+        # per-file scanner payloads.  Including their state invalidates a
+        # no-source-change incremental build when a root path moves.
+         "cargo_manifests": (
+             _cargo_manifest_state(
+                 Path(cfg.root), cargo_manifest_paths) if include_cargo else {}
+         )},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -67,6 +122,20 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     started = time.monotonic()
     report = IndexReport()
     emit = (lambda msg: None) if quiet else (log or print)
+    root = Path(cfg.root)
+    discovery_complete = True
+
+    def on_discovery_error(exc):
+        nonlocal discovery_complete
+        discovery_complete = False
+        emit(f"warning: incomplete file discovery: {exc}")
+
+    discovered = discover_files(root, cfg, onerror=on_discovery_error)
+    scan_config_complete = discovery_complete
+    has_discovered_rust = any(
+        languages.lang_for(rel.as_posix(), cfg.language_map) == "rust"
+        for rel in discovered
+    )
 
     db = Path(cfg.db_path)
     db.parent.mkdir(parents=True, exist_ok=True)
@@ -81,7 +150,29 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     store = IndexStore(str(build_db))
     build_succeeded = False
     store.set_meta("root", str(Path(cfg.root).resolve()))
-    scan_config = _scan_config(cfg)
+    known = store.all_file_paths()
+    has_indexed_rust = store.conn.execute(
+        "SELECT 1 FROM files WHERE lang = ? LIMIT 1", ("rust",)
+    ).fetchone() is not None
+    rust_source_paths = [
+        rel for rel in discovered
+        if languages.lang_for(rel.as_posix(), cfg.language_map) == "rust"
+    ]
+    if not discovery_complete:
+        # An incomplete walk may omit an existing Rust source; retain its
+        # ancestor manifests until the next complete discovery.
+        rust_source_paths.extend(path for path in known if path.endswith(".rs"))
+    cargo_manifest_paths = _cargo_manifest_paths(root, rust_source_paths)
+    scan_config = _scan_config(
+        cfg, include_cargo=has_indexed_rust or has_discovered_rust,
+        cargo_manifest_paths=cargo_manifest_paths)
+    store.set_meta(
+        "cargo_manifest_paths",
+        json.dumps([
+            manifest.relative_to(root.resolve()).as_posix()
+            for manifest in cargo_manifest_paths
+        ]),
+    )
     current_scan_config = json.loads(scan_config)
     previous_scan_config = store.get_meta("scan_config")
     try:
@@ -94,22 +185,14 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         previous_scan_config.get("engine") != current_scan_config["engine"] or
         previous_scan_config.get("language_map") != current_scan_config["language_map"]
     )
+    cargo_metadata_changed = (
+        previous_scan_config.get("cargo_manifests") !=
+        current_scan_config["cargo_manifests"]
+    )
     previous_providers = previous_scan_config.get("providers", {})
     if not isinstance(previous_providers, dict):
         previous_providers = {}
     current_providers = current_scan_config["providers"]
-    root = Path(cfg.root)
-
-    discovery_complete = True
-
-    def on_discovery_error(exc):
-        nonlocal discovery_complete
-        discovery_complete = False
-        emit(f"warning: incomplete file discovery: {exc}")
-
-    discovered = discover_files(root, cfg, onerror=on_discovery_error)
-    scan_config_complete = discovery_complete
-    known = store.all_file_paths()
     seen = set()
     changed_file_ids = set()
     recheck_call_ids = set()
@@ -117,6 +200,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     changed_symbol_names = set()
     added_file = False
     removed_file = False
+    rust_structure_changed = False
     resolution_pending = store.get_meta("resolution_pending") == "1"
 
     try:
@@ -137,6 +221,13 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                 scan_config_complete = False
                 continue
 
+            previous_mods = set()
+            if prev is not None and lang == "rust":
+                previous_mods = {
+                    row["module"] for row in store.imports_for_file(prev["id"])
+                    if row["kind"] == "mod"
+                }
+
             if not force and cfg.incremental and not scan_settings_changed:
                 if (prev is not None and prev["digest"] == digest and
                         prev["lang"] == lang and
@@ -156,6 +247,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                                         len(text.splitlines()), scan.module)
                 impact = store.replace_file_payload(fid, scan)
             changed_file_ids.add(fid)
+            if lang == "rust" and (prev is None or previous_mods or any(
+                    item.kind == "mod" for item in scan.imports)):
+                rust_structure_changed = True
             recheck_call_ids.update(impact["call_ids"])
             recheck_import_ids.update(impact["import_ids"])
             changed_symbol_names.update(impact["symbol_names"])
@@ -174,6 +268,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             # incoming edges with no signal for the next incremental run.
             store.set_meta("resolution_pending", "1")
         for path in removed_paths:
+            old = store.file_by_path(path)
+            if old is not None and old["lang"] == "rust":
+                rust_structure_changed = True
             with store.transaction():
                 impact = store.remove_file(path)
             recheck_call_ids.update(impact["call_ids"])
@@ -184,14 +281,15 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
 
         needs_resolution = (
             changed_file_ids or recheck_call_ids or recheck_import_ids or
-            changed_symbol_names or removed_file or resolution_pending
+            changed_symbol_names or removed_file or resolution_pending or
+            cargo_metadata_changed or rust_structure_changed
         )
         if needs_resolution:
             # Payload transactions commit before this pass. Persist the retry
             # marker first so a failed resolution is retried on the next run
             # instead of being hidden by unchanged file digests.
             store.set_meta("resolution_pending", "1")
-            if resolution_pending:
+            if resolution_pending or cargo_metadata_changed or rust_structure_changed:
                 resolve_all(store)
             else:
                 resolve_all(
