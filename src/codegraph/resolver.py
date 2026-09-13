@@ -127,14 +127,11 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
             return rows[0]["id"]
 
     # 4. globally unique name (last resort heuristic)
-    unresolved_import_names = {
-        re.split(r"\s+as\s+", imported_name, maxsplit=1)[-1].strip()
-        for imp in store.imports_for_file(file_id)
-        if imp["target_id"] is None
-        for imported_name in _names_of(imp)
-        if isinstance(imported_name, str) and imported_name.strip()
-    }
-    if name in unresolved_import_names:
+    unresolved_import_names, unresolved_import_wildcard = (
+        _unresolved_import_bindings(store, file_id)
+    )
+    if callee_text == name and (
+            name in unresolved_import_names or unresolved_import_wildcard):
         return None
     rows = store.conn.execute(
         "SELECT id, file_id FROM symbols WHERE name = ? LIMIT 2", (name,)
@@ -155,6 +152,8 @@ def _imported_files(store: IndexStore, file_id: int):
     for imp in store.imports_for_file(file_id):
         if imp["target_id"]:
             out.add(imp["target_id"])
+        if imp["kind"] == "module":
+            continue
         for nm in _names_of(imp):
             base = imp["module"]
             if file["lang"] == "python" and base.startswith("."):
@@ -190,6 +189,51 @@ def _names_of(imp) -> list:
         return json.loads(imp["names"] or "[]")
     except (ValueError, TypeError):
         return []
+
+
+def _unresolved_import_bindings(store: IndexStore, file_id: int):
+    """Return local names occupied by unresolved imports in ``file_id``."""
+    file = store.file_by_id(file_id)
+    if file is None:
+        return set(), False
+
+    names = set()
+    wildcard = False
+    lang = file["lang"]
+    for imp in store.imports_for_file(file_id):
+        if imp["target_id"] is not None:
+            continue
+        imported_names = _names_of(imp)
+        for imported_name in imported_names:
+            if not isinstance(imported_name, str):
+                continue
+            imported_name = imported_name.split("#", 1)[0].strip()
+            if not imported_name:
+                continue
+            if imported_name == "*":
+                wildcard = True
+                continue
+            alias = re.search(r"\s+as\s+([A-Za-z_$][\w$]*)$", imported_name)
+            names.add(alias.group(1) if alias else imported_name)
+
+        if imported_names:
+            continue
+        module = imp["module"]
+        if lang == "python" and imp["kind"] == "module":
+            names.add(last_segment(module))
+        elif lang == "rust" and imp["kind"] == "use":
+            if module.endswith("::*"):
+                wildcard = True
+            else:
+                names.add(last_segment(module))
+        elif lang == "java" and imp["kind"] == "import":
+            if module.endswith(".*"):
+                wildcard = True
+            else:
+                names.add(last_segment(module))
+        elif lang == "go" and imp["kind"] == "module":
+            names.add(last_segment(module.rsplit("/", 1)[-1]))
+    return names, wildcard
 
 
 def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str):

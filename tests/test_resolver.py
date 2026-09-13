@@ -1075,6 +1075,100 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_unresolved_import_blocks_only_bare_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                "from missing import target\n\n"
+                "def invoke(obj):\n"
+                "    return obj.target()\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.py")["id"]
+                target_id = store.symbol_by_qualname("other.target")["id"]
+                self.assertEqual(resolve_callee(store, fid, "obj.target"), target_id)
+            finally:
+                store.close()
+
+    def test_unresolved_python_import_forms_block_global_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "comment.py").write_text(
+                "from missing import target  # comment\n\n"
+                "def invoke():\n"
+                "    return target()\n",
+                encoding="utf-8",
+            )
+            (root / "wildcard.py").write_text(
+                "from missing import *\n\n"
+                "def invoke():\n"
+                "    return target()\n",
+                encoding="utf-8",
+            )
+            (root / "alias.py").write_text(
+                "import missing as target\n\n"
+                "def invoke():\n"
+                "    return target()\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                for rel in ("comment.py", "wildcard.py", "alias.py"):
+                    fid = store.file_by_path(rel)["id"]
+                    self.assertIsNone(resolve_callee(store, fid, "target"), rel)
+            finally:
+                store.close()
+
+    def test_unresolved_rust_and_java_import_bindings_block_global_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.rs").write_text(
+                "use missing::target;\n"
+                "fn invoke() { target(); }\n",
+                encoding="utf-8",
+            )
+            (root / "App.java").write_text(
+                "import static missing.Library.target;\n"
+                "class App { void invoke() { target(); } }\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                for rel in ("app.rs", "App.java"):
+                    fid = store.file_by_path(rel)["id"]
+                    self.assertIsNone(resolve_callee(store, fid, "target"), rel)
+            finally:
+                store.close()
+
     def test_module_resolution(self):
         fid = self._file_id("app.py")
         self.assertEqual(

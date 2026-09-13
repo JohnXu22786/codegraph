@@ -116,7 +116,8 @@ RE_PY_DEF = re.compile(r"^[ \t]*(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)[^:]*:")
 RE_PY_CLASS = re.compile(r"^[ \t]*class\s+(\w+)\s*(?:\([^)]*\))?\s*:")
 # note: [ \t] anchors (not \s) so MULTILINE matches cannot cross newlines and
 # report the line of a previous blank line
-RE_PY_IMP_MODULE = re.compile(r"^[ \t]*import\s+([\w.]+)", re.M)
+RE_PY_IMP_MODULE = re.compile(
+    r"^[ \t]*import\s+([\w.]+)(?:\s+as\s+(\w+))?", re.M)
 RE_PY_IMP_FROM = re.compile(r"^[ \t]*from\s+([\w.]+)\s+import\s+(.+)$", re.M)
 
 
@@ -145,9 +146,11 @@ def _python_doc(lines, header_idx):
 def _imports_python(text):
     imports = []
     for m in RE_PY_IMP_MODULE.finditer(text):
-        imports.append(ImportRec(m.group(1), [], "module", _line_no(text, m.start())))
+        names = [m.group(2)] if m.group(2) else []
+        imports.append(ImportRec(m.group(1), names, "module", _line_no(text, m.start())))
     for m in RE_PY_IMP_FROM.finditer(text):
-        names = [x.strip() for x in m.group(2).strip("()").split(",") if x.strip()]
+        imported = m.group(2).split("#", 1)[0]
+        names = [x.strip() for x in imported.strip("()").split(",") if x.strip()]
         imports.append(ImportRec(m.group(1), names, "from", _line_no(text, m.start())))
     return imports
 
