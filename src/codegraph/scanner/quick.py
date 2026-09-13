@@ -433,7 +433,8 @@ RE_JAVA_METHOD = re.compile(
 # Constructors have no return type, so they need a separate declaration
 # pattern.  The scanner verifies that the name matches the enclosing class.
 RE_JAVA_CONSTRUCTOR = re.compile(
-    r"^\s*(?:(?:public|private|protected)\s+)*(\w+)\s*\(([^)]*)\)"
+    r"^\s*(?:(?:public|private|protected)\s+|@\w+(?:\([^)]*\))?\s*)*"
+    r"(?:<[^>{}]+>\s*)?(\w+)\s*\(([^)]*)\)"
     r"\s*(?:throws\s+[\w.,\s]+)?")
 # statement keywords that can never introduce a method declaration
 _JAVA_STMT_HEADS = ("new", "return", "throw", "switch", "if", "for",

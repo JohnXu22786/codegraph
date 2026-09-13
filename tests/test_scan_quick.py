@@ -438,6 +438,16 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertNotIn(("A.A", "A"),
                          {(c.caller, c.callee) for c in scan.calls})
 
+    def test_annotated_inline_java_constructor_is_not_recorded_as_a_call(self):
+        scan = quick.quick_scan("class A { @Deprecated A() {} }\n", "java")
+
+        self.assertFalse(scan.calls)
+
+    def test_generic_inline_java_constructor_is_not_recorded_as_a_call(self):
+        scan = quick.quick_scan("class A { <T> A(T t) {} }\n", "java")
+
+        self.assertFalse(scan.calls)
+
     def test_bom_first_line_import_survives(self):
         src = "\ufeffimport os\n\ndef f():\n    pass\n"
         scan = quick.quick_scan(src, "python")
