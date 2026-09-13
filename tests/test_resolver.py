@@ -48,6 +48,35 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(cid)
         self.assertEqual(self.store.symbol_by_id(cid).qualname, "pkg.cart.create_cart")
 
+    def test_qualified_call_prefers_imported_symbol_over_same_file_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.py").write_text(
+                "def f():\n    return 'imported'\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "import lib\n\n"
+                "def f():\n    return 'local'\n\n"
+                "def caller():\n    return lib.f()\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.py")["id"]
+                symbol_id = resolve_callee(store, file_id, "lib.f")
+                self.assertIsNotNone(symbol_id)
+                self.assertEqual(
+                    store.symbol_by_id(symbol_id).qualname, "lib.f"
+                )
+                call = store.find_call(callee="lib.f", file_id=file_id)
+                self.assertIsNotNone(call)
+                self.assertEqual(call["callee_id"], symbol_id)
+            finally:
+                store.close()
+
     def test_absolute_python_import_falls_back_to_source_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
