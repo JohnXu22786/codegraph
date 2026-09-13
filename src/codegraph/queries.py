@@ -121,7 +121,13 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
     rows = store.conn.execute(
         "SELECT f.path, i.module, i.line "
         "FROM imports i JOIN files f ON f.id = i.file_id "
-        "WHERE i.target_id = ? ORDER BY f.path, i.line LIMIT ?",
+        "WHERE i.target_id = ? AND NOT EXISTS ("
+        "  SELECT 1 FROM imports earlier "
+        "  WHERE earlier.file_id = i.file_id "
+        "    AND earlier.target_id = i.target_id "
+        "    AND (earlier.line < i.line OR "
+        "         (earlier.line = i.line AND earlier.id < i.id))"
+        ") ORDER BY f.path, i.line LIMIT ?",
         (file["id"], limit),
     )
     results = [{"path": r["path"], "module": r["module"], "line": r["line"]}
