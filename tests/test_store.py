@@ -78,6 +78,26 @@ class StoreTest(unittest.TestCase):
         self.store.remove_file("a.py")
         self.assertEqual(self.store.search("hello"), [])
 
+    def test_invalid_fts_query_matches_signature(self):
+        fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
+        scan = FileScan(
+            lang="python",
+            symbols=[
+                SymbolRec(
+                    "function", "render", "a.render", "", 1, 3,
+                    '(query: "needle")', "",
+                ),
+            ],
+            calls=[],
+            imports=[],
+        )
+        with self.store.transaction():
+            self.store.replace_file_payload(fid, scan)
+
+        hits = self.store.search('"needle')
+
+        self.assertEqual([hit["qualname"] for hit in hits], ["a.render"])
+
     def test_symbols_by_name_rejects_negative_limit(self):
         fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
         with self.store.transaction():

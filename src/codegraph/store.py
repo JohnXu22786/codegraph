@@ -352,8 +352,9 @@ class IndexStore:
                 "       s.start_line, s.end_line, f.path "
                 "FROM symbols s JOIN files f ON f.id = s.file_id "
                 "WHERE s.qualname LIKE ? OR s.name LIKE ? OR s.doc LIKE ? "
+                "OR s.signature LIKE ? "
                 "ORDER BY s.qualname LIMIT ?",
-                (like, like, like, limit),
+                (like, like, like, like, limit),
             )
             out = [dict(r) for r in rows]
         return out
