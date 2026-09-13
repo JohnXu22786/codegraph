@@ -48,6 +48,40 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(cid)
         self.assertEqual(self.store.symbol_by_id(cid).qualname, "pkg.cart.create_cart")
 
+    def test_absolute_python_import_prefers_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "foo.py").write_text(
+                "def target():\n    return 'root'\n", encoding="utf-8")
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "foo.py").write_text(
+                "def target():\n    return 'package'\n", encoding="utf-8")
+            (pkg / "caller.py").write_text(
+                "import foo\n\n"
+                "def invoke():\n    return foo.target()\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("pkg/caller.py")["id"]
+                self.assertEqual(
+                    resolve_module(store, fid, "foo"),
+                    store.file_by_path("foo.py")["id"],
+                )
+                call = store.find_call(callee="foo.target", file_id=fid)
+                self.assertIsNotNone(call)
+                self.assertEqual(
+                    store.symbol_by_id(call["callee_id"]).qualname, "foo.target"
+                )
+            finally:
+                store.close()
+
     def test_attribute_call_via_imported_submodule(self):
         # cart.py: from pkg import pricing -> pricing.discount
         sid = self._callee("pkg/cart.py", "pricing.discount")
