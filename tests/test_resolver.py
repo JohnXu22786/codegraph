@@ -75,6 +75,27 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(fid)
         self.assertEqual(self.store.symbol_by_id(fid).qualname, "web/util.fmt")
 
+    def test_js_relative_import_does_not_resolve_python_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.js").write_text(
+                'const { target } = require("./util");\n'
+                "target();\n",
+                encoding="utf-8",
+            )
+            (root / "util.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.js")["id"]
+                self.assertIsNone(resolve_module(store, fid, "./util"))
+            finally:
+                store.close()
+
     def test_non_python_relative_import_does_not_add_root_module(self):
         """A JS/TS relative path must not be treated as a Python package id."""
         with tempfile.TemporaryDirectory() as tmp:
