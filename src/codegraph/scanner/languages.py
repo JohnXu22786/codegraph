@@ -22,20 +22,6 @@ EXTENSIONS = {
     ".rs": "rust",
 }
 
-_PKG_STMTS = {
-    "go": re.compile(
-        r"^\s*(?:(?://[^\n]*(?:\n|$)|/\*.*?\*/)\s*)*"
-        r"package\s+([\w.]+)\s*;?",
-        re.DOTALL,
-    ),
-    "java": re.compile(
-        r"^\s*(?:(?://[^\r\n]*(?:\r\n|\n|\r|$)|/\*.*?\*/)\s*)*"
-        r"package\s+([\w.]+)\s*;?",
-        re.DOTALL,
-    ),
-}
-
-
 def _skip_java_trivia(text, pos):
     while pos < len(text):
         if text[pos].isspace():
@@ -52,6 +38,69 @@ def _skip_java_trivia(text, pos):
         else:
             break
     return pos
+
+
+def _mask_non_code(text):
+    """Blank comments and literals while preserving source line breaks."""
+    masked = list(text)
+    length = len(text)
+
+    def blank(start, end):
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    index = 0
+    while index < length:
+        if text.startswith("//", index):
+            end = index + 2
+            while end < length and text[end] not in "\r\n":
+                end += 1
+            blank(index, end)
+            index = end
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = length if end < 0 else end + 2
+            blank(index, end)
+            index = end
+            continue
+
+        quote = None
+        if text.startswith('"""', index):
+            quote = '"""'
+            end = index + len(quote)
+            escaped = False
+            while end < length:
+                if escaped:
+                    escaped = False
+                    end += 1
+                elif text[end] == "\\":
+                    escaped = True
+                    end += 1
+                elif text.startswith(quote, end):
+                    end += len(quote)
+                    break
+                else:
+                    end += 1
+        elif text[index] in ('"', "'", "`"):
+            quote = text[index]
+            end = index + 1
+            while end < length:
+                if quote != "`" and text[end] == "\\":
+                    end = min(length, end + 2)
+                elif text[end] == quote:
+                    end += 1
+                    break
+                else:
+                    end += 1
+        if quote is not None:
+            blank(index, end)
+            index = end
+            continue
+        index += 1
+
+    return "".join(masked)
 
 
 def _skip_java_text_block(text, pos):
@@ -126,24 +175,33 @@ def _skip_java_annotation(text, pos):
     return None
 
 
-def _declared_java_package(text):
-    pos = 0
-    while True:
-        pos = _skip_java_trivia(text, pos)
-        if pos >= len(text) or text[pos] != "@":
-            break
-        pos = _skip_java_annotation(text, pos)
-        if pos is None:
-            return ""
-    match = _PKG_STMTS["java"].match(text[pos:])
-    return match.group(1) if match else ""
-
-
 def _declared_package(lang, text):
     if lang == "java":
-        return _declared_java_package(text)
-    match = _PKG_STMTS[lang].search(text)
-    return match.group(1) if match else ""
+        pos = 0
+        while True:
+            pos = _skip_java_trivia(text, pos)
+            if pos >= len(text) or text[pos] != "@":
+                break
+            pos = _skip_java_annotation(text, pos)
+            if pos is None:
+                return ""
+        source = text[pos:]
+    else:
+        source = text
+    # Normalize all line endings before masking comments and literals.
+    source = source.replace("\r\n", "\n").replace("\r", "\n")
+    source = _mask_non_code(source)
+    # Keep leading comments/trivia supported while allowing line breaks and
+    # comments between package-name components.
+    match = re.search(
+        r"(?m)^[ \t\f]*package[ \t\n\f]+"
+        r"([\w$]+(?:[ \t\n\f]*\.[ \t\n\f]*[\w$]+)*)"
+        r"[ \t\f]*(?:;[ \t\f]*|(?=\n|$))",
+        source,
+    )
+    if not match:
+        return ""
+    return re.sub(r"[ \t\n\f]*\.[ \t\n\f]*", ".", match.group(1))
 
 
 def lang_for(rel_path, overrides=None) -> "str | None":
