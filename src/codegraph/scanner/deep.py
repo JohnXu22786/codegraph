@@ -185,6 +185,12 @@ class _Walker:
         named = node.child_by_field_name("name")
         if named is not None:
             return _node_text(named, self.source).strip()
+        if self.lang == "go":
+            for child in node.children:
+                if child.type == "type_spec":
+                    named = child.child_by_field_name("name")
+                    if named is not None:
+                        return _node_text(named, self.source).strip()
         for child in node.children:
             if child.type in ("identifier", "type_identifier", "field_identifier"):
                 return _node_text(child, self.source).strip()
@@ -195,8 +201,21 @@ class _Walker:
         if recv is None:
             return ""
         for child in recv.children:
-            if child.type == "type_identifier":
-                return _node_text(child, self.source).strip()
+            if child.type != "parameter_declaration":
+                continue
+            type_node = child.child_by_field_name("type")
+            if type_node is None:
+                continue
+            return self._type_identifier(type_node)
+        return ""
+
+    def _type_identifier(self, node):
+        if node.type == "type_identifier":
+            return _node_text(node, self.source).strip()
+        for child in node.children:
+            name = self._type_identifier(child)
+            if name:
+                return name
         return ""
 
     def _signature_of(self, node):
@@ -273,9 +292,12 @@ class _Walker:
                 return None, "", ""
             if node_type == "type_declaration":
                 for child in node.children:
-                    if child.type == "interface_type":
+                    type_node = child
+                    if child.type == "type_spec":
+                        type_node = child.child_by_field_name("type")
+                    if type_node is not None and type_node.type == "interface_type":
                         kind = "interface"
-                    elif child.type == "struct_type":
+                    elif type_node is not None and type_node.type == "struct_type":
                         kind = "type"
                 return kind, name, ""
             return kind, name, ""

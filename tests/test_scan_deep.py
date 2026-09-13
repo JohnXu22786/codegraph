@@ -98,5 +98,29 @@ class DeepPythonTest(unittest.TestCase):
         self.assertEqual(deep_sig, quick_sig)
 
 
+@unittest.skipUnless(deep.supports("go"), "tree-sitter Go grammar not installed")
+class DeepGoTest(unittest.TestCase):
+    def test_type_and_receiver_method_symbols(self):
+        src = (
+            "package demo\n"
+            "\n"
+            "type Widget struct {\n"
+            "    value int\n"
+            "}\n"
+            "\n"
+            "func (w *Widget) Reset() {\n"
+            "    w.value = 0\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "widget.go")
+        symbols = {symbol.qualname: symbol for symbol in scan.symbols}
+
+        self.assertEqual(symbols["demo.Widget"].kind, "type")
+        self.assertEqual(symbols["demo.Widget"].parent, "")
+        self.assertEqual(symbols["demo.Widget.Reset"].kind, "method")
+        self.assertEqual(symbols["demo.Widget.Reset"].parent, "demo.Widget")
+
+
 if __name__ == "__main__":
     unittest.main()
