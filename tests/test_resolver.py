@@ -110,6 +110,55 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_module_qualified_call_ignores_nested_owner_outside_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.py").write_text(
+                "class C:\n"
+                "    def helper(self):\n"
+                "        return 'imported'\n",
+                encoding="utf-8",
+            )
+            (root / "app.py").write_text(
+                "from lib import C\n\n"
+                "class Outer:\n"
+                "    class C:\n"
+                "        def helper(self):\n"
+                "            return 'nested'\n\n"
+                "    def nested_caller(self):\n"
+                "        return C.helper(None)\n\n"
+                "def caller():\n"
+                "    return C.helper(None)\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.py")["id"]
+                calls = store.conn.execute(
+                    "SELECT caller_name, callee_id FROM calls "
+                    "WHERE file_id = ? AND callee = ? ORDER BY caller_name",
+                    (file_id, "C.helper"),
+                ).fetchall()
+                resolved = {}
+                for call in calls:
+                    self.assertIsNotNone(call["callee_id"])
+                    resolved[call["caller_name"]] = store.symbol_by_id(
+                        call["callee_id"]
+                    )["qualname"]
+                self.assertEqual(
+                    resolved,
+                    {
+                        "app.Outer.nested_caller": "app.Outer.C.helper",
+                        "app.caller": "lib.C.helper",
+                    },
+                )
+            finally:
+                store.close()
+
     def test_absolute_python_import_falls_back_to_source_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

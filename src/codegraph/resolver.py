@@ -61,16 +61,83 @@ def last_segment(name: str) -> str:
     return name
 
 
+def _local_qualified_symbol(store: IndexStore, file_id: int,
+                            qualified: str, name: str, caller_name=None):
+    """Resolve a qualified target in the caller's lexical scopes."""
+    file = store.file_by_id(file_id)
+    if file is None:
+        return None
+    module = file["module"]
+    caller = None
+    if caller_name:
+        caller = store.conn.execute(
+            "SELECT kind, parent, qualname FROM symbols "
+            "WHERE file_id = ? AND qualname = ? ORDER BY id LIMIT 1",
+            (file_id, caller_name),
+        ).fetchone()
+
+    if caller is not None:
+        scope = caller["qualname"] if caller["kind"] == "class" \
+            else caller["parent"]
+    elif caller_name and "." in caller_name:
+        scope = caller_name.rsplit(".", 1)[0]
+    else:
+        scope = module
+    if not scope:
+        scope = module
+
+    receiver = qualified.split(".", 1)[0]
+    if receiver in ("self", "this", "Self"):
+        if caller is None or not scope:
+            return None
+        owner = store.conn.execute(
+            "SELECT kind FROM symbols WHERE file_id = ? AND qualname = ? "
+            "ORDER BY id LIMIT 1",
+            (file_id, scope),
+        ).fetchone()
+        if owner is None or owner["kind"] not in (
+                "class", "interface", "type"):
+            return None
+        row = store.conn.execute(
+            "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
+            "ORDER BY id LIMIT 1",
+            (file_id, f"{scope}.{name}"),
+        ).fetchone()
+        return row["id"] if row else None
+
+    row = store.conn.execute(
+        "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
+        "ORDER BY id LIMIT 1",
+        (file_id, qualified),
+    ).fetchone()
+    if row:
+        return row["id"]
+
+    while scope:
+        row = store.conn.execute(
+            "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
+            "ORDER BY id LIMIT 1",
+            (file_id, f"{scope}.{qualified}"),
+        ).fetchone()
+        if row:
+            return row["id"]
+        if scope == module or "." not in scope:
+            break
+        scope = scope.rsplit(".", 1)[0]
+    return None
+
+
 def _root_of(store: IndexStore) -> Path:
     return Path(store.get_meta("root") or ".")
 
 
 def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
-                   blocked_file_ids=()):
+                   blocked_file_ids=(), caller_name=None):
     """Return the symbol id a call target refers to, or None.
 
     ``blocked_file_ids`` prevents fallback to symbols in import targets that
     are not the selected candidate for the import.
+    ``caller_name`` scopes local qualified-owner resolution to the call site.
     """
     name = last_segment(callee_text)
     if not name:
@@ -96,13 +163,10 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
             return rows[0]["id"]
     else:
         qualified = callee_text.replace("::", ".")
-        rows = store.conn.execute(
-            "SELECT id FROM symbols WHERE file_id = ? "
-            "AND (qualname = ? OR qualname GLOB ?)",
-            (file_id, qualified, f"*.{qualified}"),
-        ).fetchall()
-        if len(rows) == 1:
-            return rows[0]["id"]
+        local_id = _local_qualified_symbol(
+            store, file_id, qualified, name, caller_name)
+        if local_id is not None:
+            return local_id
         receiver = qualified.split(".", 1)[0]
         if receiver in ("self", "this", "Self"):
             rows = store.conn.execute(
@@ -1188,6 +1252,7 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                 row["file_id"],
                 row["callee"],
                 blocked_file_ids=blocked_import_files.get(row["file_id"], ()),
+                caller_name=row["caller_name"],
             )
             store.conn.execute(
                 "UPDATE calls SET caller_id = ?, callee_id = ? WHERE id = ?",
