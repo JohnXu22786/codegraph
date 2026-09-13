@@ -130,21 +130,22 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
     mod = file["module"] or ""
     if "." in mod:
         base, name = mod.rsplit(".", 1)
-        # instr() is an exact substring test, immune to LIKE wildcards in
-        # the imported member name. Match both plain and aliased JSON tokens;
-        # relative imports (module ".") count too when the importing file
-        # lives in the same package.
+        # Match plain JSON tokens with instr(); for aliases, normalize JSON's
+        # escaped tabs and use GLOB so arbitrary spaces/tabs around ``as``
+        # work. Relative imports (module ".") count too when the importing
+        # file lives in the same package.
         extra = store.conn.execute(
             "SELECT f.path, i.module, i.line "
             "FROM imports i JOIN files f ON f.id = i.file_id "
             "JOIN files impf ON impf.id = i.file_id "
-            "WHERE (instr(i.names, ?) > 0 OR instr(i.names, ?) > 0) AND ("
+            "WHERE (instr(i.names, ?) > 0 OR "
+            "replace(i.names, char(92) || 't', ' ') GLOB ?) AND ("
             "  i.module = ? "
             "  OR (i.module GLOB '.*' AND (impf.module = ? OR ("
             "    substr(impf.module, 1, length(?) + 1) = ? || '.'"
             "  )))"
             ") ORDER BY f.path, i.line LIMIT ?",
-            (f'"{name}"', f'"{name} as ', base, base, base, base, limit),
+            (f'"{name}"', f'*"{name}[ ]*as[ ]*"*', base, base, base, base, limit),
         )
         for r in extra:
             if r["path"] not in seen:
