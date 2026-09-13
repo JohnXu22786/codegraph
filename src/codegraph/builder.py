@@ -16,7 +16,7 @@ from .scanner import deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
-_RESOLVER_VERSION = 2
+_RESOLVER_VERSION = 3
 
 
 @dataclass
@@ -236,7 +236,8 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                     if row["kind"] == "mod"
                 }
 
-            if not force and cfg.incremental and not scan_settings_changed:
+            if (not force and cfg.incremental and not scan_settings_changed and
+                    not resolver_version_changed):
                 if (prev is not None and prev["digest"] == digest and
                         prev["lang"] == lang and
                         previous_providers.get(lang) == current_providers.get(lang)):

@@ -1075,6 +1075,29 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_unresolved_from_import_with_semicolon_blocks_global_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.py").write_text(
+                "from missing import target; target()\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.py")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "target"))
+            finally:
+                store.close()
+
     def test_unresolved_import_blocks_only_bare_binding(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1209,6 +1232,34 @@ class ResolverTest(unittest.TestCase):
                 self.assertIsNone(resolve_callee(store, fid, "esm_alias"))
                 self.assertIsNone(resolve_callee(store, fid, "cjs_alias"))
                 self.assertEqual(resolve_callee(store, fid, "target"), target_id)
+            finally:
+                store.close()
+
+    def test_unresolved_javascript_compact_and_multiple_requires_block_globals(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.js").write_text(
+                'const{target}=require("missing-compact");\n'
+                'const first=require("missing-first"), alias=require("missing-alias");\n'
+                "function invoke() { target(); alias(); }\n",
+                encoding="utf-8",
+            )
+            (root / "other.py").write_text(
+                "def target():\n"
+                "    return 1\n"
+                "def alias():\n"
+                "    return 2\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("app.js")["id"]
+                self.assertIsNone(resolve_callee(store, fid, "target"))
+                self.assertIsNone(resolve_callee(store, fid, "alias"))
             finally:
                 store.close()
 

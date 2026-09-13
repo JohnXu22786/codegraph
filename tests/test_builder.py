@@ -73,7 +73,8 @@ class BuilderTest(unittest.TestCase):
 
         with patch("codegraph.builder.resolve_all") as resolve:
             report = build_index(cfg)
-        self.assertEqual(report.files_skipped, ALL_FILES)
+        self.assertEqual(report.files_changed, ALL_FILES)
+        self.assertEqual(report.files_skipped, 0)
         resolve.assert_called_once()
 
     def test_resolver_version_change_re_resolves_stale_absolute_import(self):
@@ -112,7 +113,8 @@ class BuilderTest(unittest.TestCase):
                 store.close()
 
             report = build_index(cfg)
-            self.assertEqual(report.files_skipped, 4)
+            self.assertEqual(report.files_changed, 4)
+            self.assertEqual(report.files_skipped, 0)
 
             store = IndexStore(str(cfg.db_path))
             try:
@@ -156,8 +158,8 @@ class BuilderTest(unittest.TestCase):
                 store.close()
 
             report = build_index(cfg)
-            self.assertEqual(report.files_changed, 0)
-            self.assertEqual(report.files_skipped, 2)
+            self.assertEqual(report.files_changed, 2)
+            self.assertEqual(report.files_skipped, 0)
 
             store = IndexStore(str(cfg.db_path))
             try:

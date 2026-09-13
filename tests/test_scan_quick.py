@@ -53,6 +53,11 @@ class QuickPythonTest(unittest.TestCase):
         from_pkg = next(i for i in scan.imports if i.module == "pkg")
         self.assertEqual(from_pkg.names, ["pricing"])
 
+    def test_python_from_import_stops_at_semicolon(self):
+        scan = quick.quick_scan(
+            "from missing import target; target()\n", "python")
+        self.assertEqual(scan.imports[0].names, ["target"])
+
     def test_cart_calls(self):
         scan = _scan("pkg/cart.py")
         calls = {(c.caller, c.callee) for c in scan.calls}
@@ -170,6 +175,17 @@ class QuickJavascriptTest(unittest.TestCase):
         self.assertEqual(scan.imports[0].names, ["fmt"])
         self.assertEqual(scan.imports[0].kind, "require")
         self.assertIn(("web/app.greet", "fmt"), {(c.caller, c.callee) for c in scan.calls})
+
+    def test_compact_and_multiple_commonjs_bindings(self):
+        src = (
+            'const{compact}=require("mod-compact");\n'
+            'const first=require("mod-first"), second=require("mod-second");\n'
+        )
+        scan = quick.quick_scan(src, "javascript")
+        names = {item.module: item.names for item in scan.imports}
+        self.assertEqual(names["mod-compact"], ["compact"])
+        self.assertEqual(names["mod-first"], ["first"])
+        self.assertEqual(names["mod-second"], ["second"])
 
     def test_javascript_import_aliases_keep_only_local_bindings(self):
         src = (

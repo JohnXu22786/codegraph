@@ -149,7 +149,7 @@ def _imports_python(text):
         names = [m.group(2)] if m.group(2) else []
         imports.append(ImportRec(m.group(1), names, "module", _line_no(text, m.start())))
     for m in RE_PY_IMP_FROM.finditer(text):
-        imported = m.group(2).split("#", 1)[0]
+        imported = m.group(2).split(";", 1)[0].split("#", 1)[0]
         names = [x.strip() for x in imported.strip("()").split(",") if x.strip()]
         imports.append(ImportRec(m.group(1), names, "from", _line_no(text, m.start())))
     return imports
@@ -246,7 +246,7 @@ RE_JS_ESM = re.compile(
     r"^[ \t]*import\s+(?:([^'\"\n;]+?)\s+from\s+)?['\"]([^'\"]+)['\"]", re.M)
 RE_JS_REQUIRE = re.compile(r"require\(\s*['\"]([^'\"]+)['\"]\s*\)")
 RE_JS_REQ_NAMES = re.compile(
-    r"^[ \t]*(?:const|let|var)\s+(.+?)\s*=\s*require\s*\(", re.M)
+    r"^[ \t]*(?:const|let|var)\b[ \t]*(.*)$", re.M)
 RE_JS_IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 
 
@@ -261,8 +261,8 @@ def _strip_js_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
-def _split_js_top_level(text: str):
-    """Split a JavaScript binding list without splitting nested expressions."""
+def _split_js_top_level_spans(text: str):
+    """Split JavaScript text and retain each part's source offsets."""
     parts = []
     start = 0
     depth = 0
@@ -284,10 +284,29 @@ def _split_js_top_level(text: str):
         elif char in ")}]":
             depth = max(0, depth - 1)
         elif char == "," and depth == 0:
-            parts.append(text[start:index].strip())
+            part_start = start
+            part_end = index
+            while part_start < part_end and text[part_start].isspace():
+                part_start += 1
+            while part_end > part_start and text[part_end - 1].isspace():
+                part_end -= 1
+            if part_start < part_end:
+                parts.append((text[part_start:part_end], part_start, part_end))
             start = index + 1
-    parts.append(text[start:].strip())
-    return [part for part in parts if part]
+    part_start = start
+    part_end = len(text)
+    while part_start < part_end and text[part_start].isspace():
+        part_start += 1
+    while part_end > part_start and text[part_end - 1].isspace():
+        part_end -= 1
+    if part_start < part_end:
+        parts.append((text[part_start:part_end], part_start, part_end))
+    return parts
+
+
+def _split_js_top_level(text: str):
+    """Split a JavaScript binding list without splitting nested expressions."""
+    return [part for part, _start, _end in _split_js_top_level_spans(text)]
 
 
 def _js_top_level_index(text: str, wanted: str):
@@ -406,19 +425,27 @@ def _imports_javascript(text):
     for m in RE_JS_ESM.finditer(text):
         names = _js_esm_bindings(m.group(1) or "")
         imports.append(ImportRec(m.group(2), names, "import", _line_no(text, m.start())))
-    # pair each require(...) with the *nearest preceding* binding statement;
-    # searching from 0 would mis-bind names in files with several requires
-    stmts = list(RE_JS_REQ_NAMES.finditer(text))
+
+    # Associate each require with its own variable declarator.  A single
+    # declaration can contain several comma-separated declarators, and
+    # destructuring does not require whitespace after ``const``.
+    bindings_by_require = {}
+    for stmt in RE_JS_REQ_NAMES.finditer(text):
+        body = stmt.group(1)
+        for declarator, start, _end in _split_js_top_level_spans(body):
+            equals = _js_top_level_index(declarator, "=")
+            if equals < 0:
+                continue
+            lhs = declarator[:equals]
+            rhs = declarator[equals + 1:]
+            require = RE_JS_REQUIRE.search(rhs)
+            if require is None:
+                continue
+            require_start = stmt.start(1) + start + equals + 1 + require.start()
+            bindings_by_require[require_start] = _js_require_bindings(lhs)
+
     for m in RE_JS_REQUIRE.finditer(text):
-        names = []
-        stmt = None
-        for n in stmts:
-            if n.start() < m.start():
-                stmt = n
-            else:
-                break
-        if stmt is not None:
-            names = _js_require_bindings(stmt.group(1))
+        names = bindings_by_require.get(m.start(), [])
         imports.append(ImportRec(m.group(1), names, "require", _line_no(text, m.start())))
     return imports
 
