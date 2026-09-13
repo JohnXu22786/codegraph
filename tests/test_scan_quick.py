@@ -448,6 +448,38 @@ class QuickGoJavaRustTest(unittest.TestCase):
 
         self.assertFalse(scan.calls)
 
+    def test_qualified_annotation_inline_java_constructor_is_not_a_call(self):
+        scan = quick.quick_scan(
+            "class A { @java.lang.Deprecated A() {} }\n", "java")
+
+        self.assertFalse(scan.calls)
+
+    def test_nested_annotation_inline_java_constructor_is_not_a_call(self):
+        scan = quick.quick_scan(
+            "class A { @Outer(value = @Inner(...)) A() {} }\n", "java")
+
+        self.assertFalse(scan.calls)
+
+    def test_nested_generic_inline_java_constructor_is_not_a_call(self):
+        scan = quick.quick_scan(
+            "class A { <T extends Comparable<T>> A(T t) {} }\n", "java")
+
+        self.assertFalse(scan.calls)
+
+    def test_later_inline_java_constructor_is_not_a_call(self):
+        scan = quick.quick_scan(
+            "class A { int x; A() { initialize(); } }\n", "java")
+        calls = {(c.caller, c.callee) for c in scan.calls}
+
+        self.assertNotIn(("A", "A"), calls)
+        self.assertIn(("A", "initialize"), calls)
+
+    def test_annotated_java_class_constructor_is_not_a_call(self):
+        scan = quick.quick_scan(
+            "@Deprecated class A { A() {} }\n", "java")
+
+        self.assertFalse(scan.calls)
+
     def test_bom_first_line_import_survives(self):
         src = "\ufeffimport os\n\ndef f():\n    pass\n"
         scan = quick.quick_scan(src, "python")

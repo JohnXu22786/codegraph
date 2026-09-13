@@ -416,10 +416,8 @@ def _scan_go(text, lang, rel_path=None):
 # --------------------------------------------------------------------------
 
 RE_JAVA_CLASS = re.compile(
-    r"^\s*(?:(?:public|final|abstract|sealed|non-sealed|static|strictfp)\s+)*"
-    r"class\s+(\w+)")
-RE_JAVA_INTERFACE = re.compile(
-    r"^\s*(?:(?:public|static|sealed)\s+)*interface\s+(\w+)")
+    r"^\s*class\s+(\w+)")
+RE_JAVA_INTERFACE = re.compile(r"^\s*interface\s+(\w+)")
 # method-like lines: modifiers? Type [Type ...] name( params ) [throws ...]
 # The type segment may hold several space-separated tokens (generics like
 # "Map<String, Integer>"); the method name is the token right before '('.
@@ -433,13 +431,157 @@ RE_JAVA_METHOD = re.compile(
 # Constructors have no return type, so they need a separate declaration
 # pattern.  The scanner verifies that the name matches the enclosing class.
 RE_JAVA_CONSTRUCTOR = re.compile(
-    r"^\s*(?:(?:public|private|protected)\s+|@\w+(?:\([^)]*\))?\s*)*"
-    r"(?:<[^>{}]+>\s*)?(\w+)\s*\(([^)]*)\)"
+    r"^\s*(\w+)\s*\(([^)]*)\)"
     r"\s*(?:throws\s+[\w.,\s]+)?")
 # statement keywords that can never introduce a method declaration
 _JAVA_STMT_HEADS = ("new", "return", "throw", "switch", "if", "for",
                     "while", "catch", "synchronized")
 RE_JAVA_IMP = re.compile(r"^[ \t]*import\s+(?:static\s+)?([\w.*]+)\s*;", re.M)
+
+_JAVA_TYPE_MODIFIERS = {
+    "public", "final", "abstract", "sealed", "non-sealed", "static",
+    "strictfp",
+}
+_JAVA_CONSTRUCTOR_MODIFIERS = {"public", "private", "protected"}
+RE_JAVA_WORD = re.compile(r"[A-Za-z_$][\w$-]*")
+
+
+def _java_balanced_end(text, start, opening="(", closing=")"):
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ('"', "'"):
+            quote = char
+        elif char == opening:
+            depth += 1
+        elif char == closing:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return len(text)
+
+
+def _java_skip_annotation(text, start):
+    if start >= len(text) or text[start] != "@":
+        return start
+    name = re.match(
+        r"[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*", text[start + 1:])
+    if not name:
+        return start
+    end = start + 1 + name.end()
+    while end < len(text) and text[end].isspace():
+        end += 1
+    if end < len(text) and text[end] == "(":
+        end = _java_balanced_end(text, end)
+    return end
+
+
+def _java_mask_prefix(text, words, allow_type_parameters=False):
+    chars = list(text)
+    pos = 0
+    while pos < len(text):
+        while pos < len(text) and text[pos].isspace():
+            pos += 1
+        if pos >= len(text):
+            break
+        if text[pos] == "@":
+            end = _java_skip_annotation(text, pos)
+            if end == pos:
+                break
+        elif allow_type_parameters and text[pos] == "<":
+            end = _java_balanced_end(text, pos, "<", ">")
+        else:
+            word = RE_JAVA_WORD.match(text, pos)
+            if not word or word.group(0) not in words:
+                break
+            end = word.end()
+        for index in range(pos, end):
+            if chars[index] != "\n":
+                chars[index] = " "
+        pos = end
+    return "".join(chars)
+
+
+def _java_type_match(line):
+    declaration_line = _java_mask_prefix(line, _JAVA_TYPE_MODIFIERS)
+    match = RE_JAVA_CLASS.match(declaration_line)
+    if match:
+        return match, "class"
+    match = RE_JAVA_INTERFACE.match(declaration_line)
+    if match:
+        return match, "interface"
+    return None, None
+
+
+def _java_constructor_match(text):
+    return RE_JAVA_CONSTRUCTOR.match(
+        _java_mask_prefix(text, _JAVA_CONSTRUCTOR_MODIFIERS, True))
+
+
+def _java_inline_members(text):
+    member_start = 0
+    brace_depth = 0
+    paren_depth = 0
+    bracket_depth = 0
+    quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ('"', "'"):
+            quote = char
+            continue
+        if char == "(":
+            paren_depth += 1
+        elif char == ")":
+            paren_depth = max(0, paren_depth - 1)
+        elif char == "[":
+            bracket_depth += 1
+        elif char == "]":
+            bracket_depth = max(0, bracket_depth - 1)
+        elif char == "{":
+            brace_depth += 1
+        elif char == "}":
+            brace_depth = max(0, brace_depth - 1)
+
+        if (not (brace_depth or paren_depth or bracket_depth)
+                and char in (";", "}")):
+            yield member_start, index + 1
+            member_start = index + 1
+    yield member_start, len(text)
+
+
+def _java_strip_inline_constructors(text, class_name):
+    spans = []
+    for start, end in _java_inline_members(text):
+        candidate = _java_constructor_match(text[start:end])
+        if (candidate and candidate.group(1) == class_name
+                and text[start + candidate.end():end].lstrip().startswith("{")):
+            spans.append((start, start + candidate.end()))
+    if not spans:
+        return text
+    chars = list(text)
+    for start, end in spans:
+        for index in range(start, end):
+            if chars[index] != "\n":
+                chars[index] = " "
+    return "".join(chars)
 
 
 def _imports_java(text):
@@ -455,18 +597,17 @@ def _scan_java(text, lang, rel_path=None):
     classes = []  # (open_depth, qualname, kind)
     items = []
     for idx, line in enumerate(lines, start=1):
-        m = RE_JAVA_CLASS.match(line) or RE_JAVA_INTERFACE.match(line)
+        m, kind = _java_type_match(line)
         if m:
             parent = classes[-1][1] if classes else ''
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
-            kind = "interface" if RE_JAVA_INTERFACE.match(line) else "class"
             classes.append((depth, qual, kind))
             items.append((idx, depth, SymbolRec(kind, m.group(1), qual, parent, idx, 0, "")))
             if kind == "class":
                 open_brace = line.find("{", m.end())
                 if open_brace >= 0:
-                    candidate = RE_JAVA_CONSTRUCTOR.match(line[open_brace + 1:])
+                    candidate = _java_constructor_match(line[open_brace + 1:])
                     if candidate and candidate.group(1) == m.group(1):
                         items.append((
                             idx, depth + 1,
@@ -495,7 +636,7 @@ def _scan_java(text, lang, rel_path=None):
         ctor = None
         if (classes and classes[-1][2] == "class"
                 and depth == classes[-1][0] + 1):
-            candidate = RE_JAVA_CONSTRUCTOR.match(line)
+            candidate = _java_constructor_match(line)
             if (candidate
                     and candidate.group(1) == classes[-1][1].rsplit(".", 1)[-1]):
                 ctor = candidate
@@ -514,15 +655,14 @@ def _scan_java(text, lang, rel_path=None):
     recs = _finalize(items, n)
     calls = []
     for idx, line in enumerate(lines, start=1):
-        class_match = RE_JAVA_CLASS.match(line)
+        class_match, class_kind = _java_type_match(line)
+        if class_kind != "class":
+            class_match = None
         brace = line.find("{", class_match.end()) if class_match else line.find("{")
         if brace >= 0:
             line = line[brace + 1:]
             if class_match:
-                constructor = RE_JAVA_CONSTRUCTOR.match(line)
-                if (constructor
-                        and constructor.group(1) == class_match.group(1)):
-                    line = line[constructor.end():]
+                line = _java_strip_inline_constructors(line, class_match.group(1))
         for callee in _calls_in_line(line, JAVA_EXCLUDE):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
