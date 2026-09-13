@@ -8,6 +8,7 @@
     "index.js",
     "src",
     "cordis.patch.yml",
+    "plugin.json",
     "README.md",
     "LICENSE"
   ],

@@ -143,6 +143,16 @@ test('npm package includes the bundled Python source', () => {
   assert.ok(files.includes('src/codegraph/__main__.py'))
 })
 
+test('npm package includes the self-describing plugin manifest', () => {
+  const pack = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    cwd: PLUGIN_DIR,
+    encoding: 'utf8',
+  }))
+  const files = pack[0]?.files?.map(({ path }) => path) ?? []
+
+  assert.ok(files.includes('plugin.json'))
+})
+
 test('apply registers exactly the eight documented tools', async () => {
   const tools = await applyOnce()
   assert.deepEqual(
