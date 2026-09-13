@@ -70,11 +70,13 @@ def export_dot(store: IndexStore) -> str:
         if fid not in by_file:  # defensive: symbol without a file node group
             lines.append(f'  n{sid} [label="{_esc(qualname)}" kind="{_esc(kind)}"];')
 
-    for r in store.conn.execute("SELECT caller_id, callee_id, callee, file_id FROM calls"):
+    for r in store.conn.execute(
+            "SELECT id, caller_id, callee_id, callee, file_id FROM calls"):
         if r["caller_id"] and r["callee_id"]:
             lines.append(f'  n{r["caller_id"]} -> n{r["callee_id"]};')
         elif r["caller_id"]:
-            target = f'"{_esc(r["callee"])}"'
+            target = f'u{r["id"]}'
+            lines.append(f'  {target} [label="{_esc(r["callee"])}"];')
             lines.append(f'  n{r["caller_id"]} -> {target} [style=dashed];')
 
     for r in store.conn.execute(
