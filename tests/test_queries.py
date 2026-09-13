@@ -121,6 +121,67 @@ class QueryTest(unittest.TestCase):
         got2 = sorted(r["path"] for r in rows2)
         self.assertEqual(got2, ["web/app.js", "web/index.ts"])
 
+    def test_dependents_via_aliased_member_import(self):
+        """dependents() must see aliased Python member imports."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "pricing.py").write_text(
+                "def price(item):\n    return item\n", encoding="utf-8")
+            (root / "consumer.py").write_text(
+                "from pkg import pricing as p\n\n"
+                "def total(item):\n    return p.price(item)\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "pkg.pricing")
+                self.assertEqual([row["path"] for row in rows], ["consumer.py"])
+            finally:
+                store.close()
+
+    def test_dependents_via_aliased_member_import_with_whitespace(self):
+        """dependents() must allow flexible whitespace around ``as``."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "pricing.py").write_text(
+                "def price(item):\n    return item\n", encoding="utf-8")
+            (root / "consumer_spaces.py").write_text(
+                "from pkg import pricing    as p\n\n"
+                "def total(item):\n    return p.price(item)\n",
+                encoding="utf-8",
+            )
+            (root / "consumer_tabs.py").write_text(
+                "from pkg import pricing\tas\tp\n\n"
+                "def total(item):\n    return p.price(item)\n",
+                encoding="utf-8",
+            )
+            (root / "consumer_prefix.py").write_text(
+                "from pkg import pricing_factory as p\n\n"
+                "def total(item):\n    return p.price(item)\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "pkg.pricing")
+                self.assertEqual(
+                    sorted(row["path"] for row in rows),
+                    ["consumer_spaces.py", "consumer_tabs.py"],
+                )
+            finally:
+                store.close()
+
     def test_dependents_limit_caps_the_union(self):
         """The member-import pass must not push results past the limit."""
         rows = query_dependents(self.store, "pkg.pricing", limit=1)
