@@ -38,6 +38,80 @@ class LanguageRegistryTest(unittest.TestCase):
         self.assertEqual(languages.lang_for("notes.md", cfg.language_map), "markdown")
         self.assertIsNone(languages.lang_for("notes.md"))
 
+    def test_package_after_leading_comments_and_build_tags(self):
+        go = "//go:build linux\n// +build linux\n\npackage service\n"
+        self.assertEqual(
+            languages.module_of("cmd/service.go", "go", go), "service"
+        )
+
+        java = "/* generated source */\n// license\npackage com.example.service;\n"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
+    def test_package_text_inside_leading_block_comment_is_ignored(self):
+        java = "/*\npackage not.the.real.package;\n*/\npackage com.example.real;\n"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.real",
+        )
+
+    def test_package_lookup_handles_cr_only_line_endings(self):
+        java = "// license\rpackage com.example.service;\r"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
+    def test_package_text_inside_java_text_block_is_ignored(self):
+        java = (
+            "class Example {\n"
+            '    String text = """\n'
+            "            package bogus;\n"
+            '            """;\n'
+            "}\n"
+        )
+        self.assertEqual(
+            languages.module_of("Example.java", "java", java), "Example"
+        )
+
+    def test_package_tokens_allow_newlines_and_comments(self):
+        go = "package\nmain\n"
+        self.assertEqual(languages.module_of("cmd/main.go", "go", go), "main")
+
+        java = "package com /* comment */ .\n example;\n"
+        self.assertEqual(
+            languages.module_of("Example.java", "java", java), "com.example"
+        )
+
+    def test_escaped_java_text_block_delimiter_stays_inside_literal(self):
+        java = (
+            "class Example {\n"
+            '    String text = """\n'
+            '            \\\"\"\"\n'
+            "            package bogus;\n"
+            '            """;\n'
+            "}\n"
+        )
+        self.assertEqual(
+            languages.module_of("Example.java", "java", java), "Example"
+        )
+
+    def test_java_package_annotations_are_supported(self):
+        java = "@Deprecated package com.example.service;\n"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
+    def test_java_form_feed_before_package_is_whitespace(self):
+        java = "\fpackage com.example.service;\f"
+        self.assertEqual(
+            languages.module_of("Service.java", "java", java),
+            "com.example.service",
+        )
+
 
 class WalkTest(unittest.TestCase):
     def test_default_discovery(self):

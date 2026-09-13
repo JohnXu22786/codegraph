@@ -1,5 +1,6 @@
 """Tests for incremental index building (builder.build_index)."""
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -406,6 +407,33 @@ class BuilderTest(unittest.TestCase):
                 self.assertIsNone(store.symbol_by_qualname("module.target"))
             finally:
                 store.close()
+
+    def test_scanner_version_change_replaces_unchanged_file_payload(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "module.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                store.set_meta(
+                    "scan_config",
+                    json.dumps({
+                        "engine": "quick",
+                        "language_map": {},
+                        "providers": {"python": "quick"},
+                    }),
+                )
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 1)
+            self.assertEqual(report.files_skipped, 0)
 
     def test_auto_provider_change_replaces_unchanged_file_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
