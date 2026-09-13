@@ -33,6 +33,20 @@ function makePythonWrapper(dir, logPath, body = 'exec python3 "$@"') {
   return wrapper
 }
 
+function makePidLoggingPythonWrapper(dir, logPath) {
+  const wrapper = join(dir, 'python-pid-wrapper.sh')
+  writeFileSync(
+    wrapper,
+    `#!/bin/sh
+printf '%s %s\\n' "$$" "$*" >> ${shellQuote(logPath)}
+exec python3 "$@"
+`,
+    'utf8',
+  )
+  chmodSync(wrapper, 0o755)
+  return wrapper
+}
+
 function makeFallbackRecoveryWrapper(dir, logPath, failPath, releasePath, donePath) {
   const wrapper = join(dir, 'python-fallback-wrapper.sh')
   const countPath = join(dir, 'persistent-count')
@@ -93,6 +107,20 @@ async function waitForEvent(logPath, event) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   assert.fail(`timed out waiting for ${event}; events: ${eventsFrom(logPath).join(', ')}`)
+}
+
+async function waitForPidExit(pid) {
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch (error) {
+      if (error.code === 'ESRCH') return
+      throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.fail(`timed out waiting for process ${pid} to exit`)
 }
 
 async function closePlugin() {
@@ -201,6 +229,37 @@ test('bridge reuses one persistent Python process for a root', async () => {
     assert.equal((await byName.codegraph_search.execute({ query: 'cart' })).ok, true)
     const invocations = readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean)
     assert.equal(invocations.length, 1)
+  } finally {
+    await closePlugin()
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
+test('bridge evicts idle persistent sessions across distinct roots', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-session-eviction-'))
+  const logPath = join(scratch, 'python-invocations.log')
+  const python = makePidLoggingPythonWrapper(scratch, logPath)
+  const roots = Array.from({ length: 9 }, (_, index) => join(scratch, `proj-${index}`))
+  for (const root of roots) cpSync(PROJ, root, { recursive: true })
+
+  try {
+    const tools = await applyOnce({ python })
+    const overview = tools.find((tool) => tool.name === 'codegraph_overview')
+
+    for (const root of roots) {
+      const result = await overview.execute({ root })
+      assert.equal(result.ok, false)
+    }
+    const invocations = eventsFrom(logPath)
+    assert.equal(invocations.length, roots.length)
+    const firstPid = Number(invocations[0].split(' ', 1)[0])
+    assert.ok(Number.isInteger(firstPid) && firstPid > 0)
+    await waitForPidExit(firstPid)
+
+    // The first root is the least recently used one and must have been closed.
+    const result = await overview.execute({ root: roots[0] })
+    assert.equal(result.ok, false)
+    assert.equal(eventsFrom(logPath).length, roots.length + 1)
   } finally {
     await closePlugin()
     rmSync(scratch, { recursive: true, force: true })
