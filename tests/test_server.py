@@ -125,6 +125,12 @@ class McpServerTest(unittest.TestCase):
         replies = self._run([self._msg(1, "ping")])
         self.assertEqual(replies[0]["result"], {})
 
+    def test_missing_jsonrpc_version_returns_invalid_request(self):
+        replies = self._run([{"id": 1, "method": "ping"}])
+        self.assertEqual(replies[0]["id"], 1)
+        self.assertEqual(replies[0]["error"]["code"], -32600)
+        self.assertEqual(replies[0]["error"]["message"], "Invalid Request")
+
     def test_deps_tool_works(self):
         """Regression: deps used to crash with a KeyError in its renderer."""
         replies = self._run([self._msg(1, "tools/call", {
