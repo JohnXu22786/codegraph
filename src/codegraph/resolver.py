@@ -1004,7 +1004,9 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
                 if (rel := rel_of(cand)) is not None]
 
     # --- go / java: try the module text as a path under the root ----------
-    parts = module_text.split(".")
+    # Go import paths use slashes for directories; dots are valid in a path
+    # segment (for example, the domain in ``example.com/acme``).
+    parts = module_text.split("/") if lang == "go" else module_text.split(".")
     cands = []
     for ext in _EXT_BY_LANG[lang]:
         cands.append(Path(*parts).with_suffix(ext))
