@@ -99,10 +99,17 @@ class BuilderTest(unittest.TestCase):
             store = IndexStore(str(cfg.db_path))
             try:
                 package_id = store.file_by_path("pkg/foo.py")["id"]
+                package_target_id = store.symbol_by_qualname("pkg.foo.target")["id"]
                 import_row = store.find_import(module="foo")
                 store.conn.execute(
                     "UPDATE imports SET target_id = ? WHERE id = ?",
                     (package_id, import_row["id"]),
+                )
+                call_row = store.find_call(callee="foo.target")
+                self.assertIsNotNone(call_row)
+                store.conn.execute(
+                    "UPDATE calls SET callee_id = ? WHERE id = ?",
+                    (package_target_id, call_row["id"]),
                 )
                 scan_config = json.loads(store.get_meta("scan_config"))
                 scan_config["resolver_version"] = 4
@@ -120,6 +127,11 @@ class BuilderTest(unittest.TestCase):
                 self.assertEqual(
                     store.file_by_id(import_row["target_id"])["path"], "foo.py"
                 )
+                call_row = store.find_call(callee="foo.target")
+                self.assertIsNotNone(call_row)
+                self.assertEqual(
+                    store.file_by_id(call_row["callee_id"])["path"], "foo.py"
+                )
             finally:
                 store.close()
 
@@ -128,9 +140,11 @@ class BuilderTest(unittest.TestCase):
             root = Path(tmp)
             src = root / "src"
             src.mkdir()
+            source_package = src / "pkg"
+            source_package.mkdir()
             (src / "util.py").write_text(
                 "def target():\n    return 'src'\n", encoding="utf-8")
-            (src / "app.py").write_text(
+            (source_package / "app.py").write_text(
                 "import util\n\n"
                 "def invoke():\n    return util.target()\n",
                 encoding="utf-8",
