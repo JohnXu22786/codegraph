@@ -23,7 +23,9 @@ jobs:
           python-version: "3.10"
       - run: python -m pip install "tomli>=1.1.0; python_version < '3.11'" "tree-sitter>=0.23" tree-sitter-python tree-sitter-javascript tree-sitter-typescript tree-sitter-go tree-sitter-java tree-sitter-rust
       - run: python -m unittest discover -s tests -t .
-      - uses: actions/setup-node@v4
+      - if: always()
+        uses: actions/setup-node@v4
         with:
           node-version: "18"
-      - run: npm test
+      - if: always()
+        run: npm test
