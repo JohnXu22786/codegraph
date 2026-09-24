@@ -9,6 +9,7 @@ which provider produced the data.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from ..models import CallRec, FileScan, ImportRec, SymbolRec
 from . import languages
@@ -39,30 +40,44 @@ _GRAMMAR_MODULES = {
 _language_cache = {}
 
 
-def _language(lang):
+def _language(lang, rel_path=None):
     """Return the tree-sitter Language for ``lang`` or None.
 
     Grammar wheels expose different accessors depending on the package and
     core version: ``language()``, ``language_typescript()``/``language_tsx()``
-    (typescript ships two variants), or the older ``get_language()``.
+    (typescript ships two variants), or the older ``get_language()``. For
+    TypeScript, the file extension selects the TS or TSX grammar.
     """
-    if lang in _language_cache:
-        return _language_cache[lang]
+    variant = None
+    if lang == "typescript":
+        suffix = Path(str(rel_path)).suffix.lower() if rel_path else ""
+        variant = "tsx" if suffix == ".tsx" else "typescript"
+        cache_key = (lang, variant)
+    else:
+        cache_key = lang
+    if cache_key in _language_cache:
+        return _language_cache[cache_key]
     result = None
     try:
         import tree_sitter  # noqa: F401  (grammar modules need the core lib)
         mod_name = _GRAMMAR_MODULES.get(lang)
         if mod_name:
             mod = __import__(mod_name, fromlist=["language"])
-            for attr in ("language", "language_tsx", "language_typescript",
-                         "get_language"):
+            if lang == "typescript":
+                specific = "language_tsx" if variant == "tsx" else "language_typescript"
+                alternate = "language_typescript" if variant == "tsx" else "language_tsx"
+                accessors = (specific, "language", alternate, "get_language")
+            else:
+                accessors = ("language", "language_tsx", "language_typescript",
+                             "get_language")
+            for attr in accessors:
                 if hasattr(mod, attr):
                     result = getattr(mod, attr)()
                     if result is not None:
                         break
     except Exception:
         result = None
-    _language_cache[lang] = result
+    _language_cache[cache_key] = result
     return result
 
 
@@ -328,7 +343,7 @@ class _Walker:
 
 def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
     """Parse ``text`` with tree-sitter and emit the standard FileScan shape."""
-    grammar = _language(lang)
+    grammar = _language(lang, rel_path)
     if grammar is None:
         raise RuntimeError(f"no tree-sitter grammar available for {lang!r}")
 
