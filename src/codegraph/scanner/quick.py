@@ -266,7 +266,7 @@ JS_RESERVED_NAMES = {
     "type", "enum", "namespace", "declare", "super", "this", "void",
 }
 RE_JS_ESM = re.compile(
-    r"^[ \t]*import\s+(?:([^'\"\n;]+?)\s+from\s+)?['\"]([^'\"]+)['\"]", re.M)
+    r"^[ \t]*import\s+(?:([^'\";]+?)\s+from\s+)?['\"]([^'\"]+)['\"]", re.M)
 RE_JS_REQUIRE = re.compile(r"require\(\s*['\"]([^'\"]+)['\"]\s*\)")
 RE_JS_REQ_NAMES = re.compile(r"(?:const|let|var)\s*\{?\s*([^=\n]*?)\s*\}?\s*=\s*require")
 RE_JS_IDENT = re.compile(r"[A-Za-z_$][\w$]*")
