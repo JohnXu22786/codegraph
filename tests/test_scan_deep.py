@@ -102,6 +102,20 @@ class DeepPythonTest(unittest.TestCase):
     deep.supports("typescript"), "tree-sitter TypeScript grammar not installed"
 )
 class DeepTypescriptTest(unittest.TestCase):
+    def test_generic_calls_are_recorded(self):
+        src = "function caller() { foo<T>(); obj.foo<T>(); ns.foo<T>(); }"
+
+        scan = deep.deep_scan(src, "typescript", "caller.ts")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("caller.caller", "foo"),
+                ("caller.caller", "obj.foo"),
+                ("caller.caller", "ns.foo"),
+            },
+        )
+
     def test_type_assertion_in_ts_keeps_calls(self):
         src = "function caller() { const x = <Item>make(); consume(x); }"
 
@@ -125,6 +139,53 @@ class DeepTypescriptTest(unittest.TestCase):
 
 @unittest.skipUnless(deep.supports("go"), "tree-sitter Go grammar not installed")
 class DeepGoTest(unittest.TestCase):
+    def test_generic_calls_are_recorded(self):
+        src = (
+            "package demo\n"
+            "func foo[T any]() {}\n"
+            "func caller[T any]() { foo[T](); foo[int]() }"
+        )
+
+        scan = deep.deep_scan(src, "go", "caller.go")
+
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("demo.caller", "foo"), ("demo.caller", "foo")],
+        )
+
+    def test_indexed_function_values_are_not_generic_calls(self):
+        src = "package demo\nfunc caller(i int) { callbacks[i]() }"
+
+        scan = deep.deep_scan(src, "go", "caller.go")
+
+        self.assertEqual(scan.calls, [])
+
+    def test_local_values_shadow_generic_function_names(self):
+        src = (
+            "package demo\n"
+            "func foo[T any]() {}\n"
+            "func caller[T any]() { foo[T](); foo := make([]func(), 1); foo[0]() }\n"
+            "func shadow(foo map[int]func()) { foo[0]() }"
+        )
+
+        scan = deep.deep_scan(src, "go", "caller.go")
+
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("demo.caller", "foo"), ("demo.caller", "make")],
+        )
+
+    def test_imported_generic_call_and_conversion_shapes_are_not_guessed(self):
+        src = (
+            "package demo\n"
+            "import \"example.com/other\"\n"
+            "func caller[T any]() { other.Foo[T](); other.Type[T](value) }"
+        )
+
+        scan = deep.deep_scan(src, "go", "caller.go")
+
+        self.assertEqual(scan.calls, [])
+
     def test_type_and_receiver_method_symbols(self):
         src = (
             "package demo\n"
@@ -191,6 +252,23 @@ class DeepGoTest(unittest.TestCase):
         self.assertEqual(method.start, 7)
         self.assertEqual(calls["setup"], "")
         self.assertEqual(calls["helper"], "demo.Widget.Reset")
+
+
+@unittest.skipUnless(deep.supports("rust"), "tree-sitter Rust grammar not installed")
+class DeepRustTest(unittest.TestCase):
+    def test_generic_calls_are_recorded(self):
+        src = "fn caller() { foo::<T>(); obj.foo::<T>(); ns::foo::<T>(); }"
+
+        scan = deep.deep_scan(src, "rust", "caller.rs")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("caller.caller", "foo"),
+                ("caller.caller", "obj.foo"),
+                ("caller.caller", "ns::foo"),
+            },
+        )
 
 
 if __name__ == "__main__":
