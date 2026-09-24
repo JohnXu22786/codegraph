@@ -98,6 +98,31 @@ class DeepPythonTest(unittest.TestCase):
         self.assertEqual(deep_sig, quick_sig)
 
 
+@unittest.skipUnless(
+    deep.supports("typescript"), "tree-sitter TypeScript grammar not installed"
+)
+class DeepTypescriptTest(unittest.TestCase):
+    def test_type_assertion_in_ts_keeps_calls(self):
+        src = "function caller() { const x = <Item>make(); consume(x); }"
+
+        scan = deep.deep_scan(src, "typescript", "caller.ts")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("caller.caller", "make"), ("caller.caller", "consume")},
+        )
+
+    def test_tsx_extension_uses_jsx_grammar(self):
+        src = "function render() { const x = <Item>{make()}</Item>; consume(x); }"
+
+        scan = deep.deep_scan(src, "typescript", "render.tsx")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("render.render", "make"), ("render.render", "consume")},
+        )
+
+
 @unittest.skipUnless(deep.supports("go"), "tree-sitter Go grammar not installed")
 class DeepGoTest(unittest.TestCase):
     def test_type_and_receiver_method_symbols(self):
