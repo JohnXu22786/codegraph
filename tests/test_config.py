@@ -44,6 +44,11 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(cfg.root, str(self.root))
         self.assertEqual(cfg.exclude, DEFAULT_EXCLUDES)
 
+    def test_explicit_missing_config_file_is_an_error(self):
+        config_path = self.root / "missing.json"
+        with self.assertRaisesRegex(FileNotFoundError, str(config_path)):
+            load_config(root=str(self.root), config_path=str(config_path))
+
     def test_file_values_apply(self):
         (self.root / "codegraph.json").write_text(
             json.dumps({"include": ["src"], "max_file_kb": 128, "engine": "deep"}),
