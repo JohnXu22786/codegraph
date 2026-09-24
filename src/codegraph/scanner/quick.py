@@ -116,7 +116,12 @@ RE_PY_DEF = re.compile(r"^[ \t]*(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)[^:]*:")
 RE_PY_CLASS = re.compile(r"^[ \t]*class\s+(\w+)\s*(?:\([^)]*\))?\s*:")
 # note: [ \t] anchors (not \s) so MULTILINE matches cannot cross newlines and
 # report the line of a previous blank line
-RE_PY_IMP_MODULE = re.compile(r"^[ \t]*import\s+([\w.]+)", re.M)
+RE_PY_IMP_START = re.compile(r"^[ \t]*import\b")
+PY_DOTTED_MODULE = r"\w+(?:\s*\.\s*\w+)*"
+RE_PY_IMP_MODULE_NAME = re.compile(PY_DOTTED_MODULE)
+RE_PY_IMP_MODULE = re.compile(
+    rf"^[ \t]*import\s+({PY_DOTTED_MODULE}(?:\s+as\s+\w+)?"
+    rf"(?:\s*,\s*{PY_DOTTED_MODULE}(?:\s+as\s+\w+)?)*)")
 RE_PY_IMP_FROM = re.compile(r"^[ \t]*from\s+([\w.]+)\s+import\s+(.+)$", re.M)
 
 
@@ -144,8 +149,29 @@ def _python_doc(lines, header_idx):
 
 def _imports_python(text):
     imports = []
-    for m in RE_PY_IMP_MODULE.finditer(text):
-        imports.append(ImportRec(m.group(1), [], "module", _line_no(text, m.start())))
+    lines = re.split(r"(?<=\n)|(?<=\r)(?!\n)", text)
+    idx = 0
+    while idx < len(lines):
+        if not RE_PY_IMP_START.match(lines[idx]):
+            idx += 1
+            continue
+        start = idx
+        statement = []
+        while idx < len(lines):
+            segment = lines[idx].rstrip("\r\n").split("#", 1)[0]
+            continued = segment.endswith("\\")
+            statement.append(segment[:-1] if continued else segment)
+            idx += 1
+            if not continued:
+                break
+        m = RE_PY_IMP_MODULE.match("".join(statement))
+        if m:
+            line = start + 1
+            for item in m.group(1).split(","):
+                name = RE_PY_IMP_MODULE_NAME.match(item.strip())
+                if name:
+                    module = re.sub(r"\s+", "", name.group(0))
+                    imports.append(ImportRec(module, [], "module", line))
     for m in RE_PY_IMP_FROM.finditer(text):
         names = [x.strip() for x in m.group(2).strip("()").split(",") if x.strip()]
         imports.append(ImportRec(m.group(1), names, "from", _line_no(text, m.start())))
