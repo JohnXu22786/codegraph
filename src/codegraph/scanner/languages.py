@@ -22,7 +22,23 @@ EXTENSIONS = {
     ".rs": "rust",
 }
 
-_PKG_STMT = re.compile(r"^\s*package\s+([\w.]+)\s*;?")
+_PKG_STMTS = {
+    "go": re.compile(
+        r"^\s*(?:(?://[^\n]*(?:\n|$)|/\*.*?\*/)\s*)*"
+        r"package\s+([\w.]+)\s*;?",
+        re.DOTALL,
+    ),
+    "java": re.compile(
+        r"^\s*(?:(?://[^\r\n]*(?:\r\n|\n|\r|$)|/\*.*?\*/)\s*)*"
+        r"package\s+([\w.]+)\s*;?",
+        re.DOTALL,
+    ),
+}
+
+
+def _declared_package(lang, text):
+    match = _PKG_STMTS[lang].search(text)
+    return match.group(1) if match else ""
 
 
 def lang_for(rel_path, overrides=None) -> "str | None":
@@ -44,8 +60,7 @@ def module_of(rel_path, lang, text="") -> str:
     """
     if not rel_path:
         if lang in ("go", "java"):
-            m = _PKG_STMT.search(text)
-            return m.group(1) if m else ""
+            return _declared_package(lang, text)
         return ""
     rel = Path(rel_path)
     if lang == "python":
@@ -54,9 +69,9 @@ def module_of(rel_path, lang, text="") -> str:
             parts = parts[:-1]
         return ".".join(parts) if parts else ""
     if lang == "go":
-        m = _PKG_STMT.search(text)
-        return m.group(1) if m else rel.with_suffix("").as_posix()
+        package = _declared_package(lang, text)
+        return package or rel.with_suffix("").as_posix()
     if lang == "java":
-        m = _PKG_STMT.search(text)
-        return m.group(1) if m else rel.with_suffix("").as_posix()
+        package = _declared_package(lang, text)
+        return package or rel.with_suffix("").as_posix()
     return rel.with_suffix("").as_posix()

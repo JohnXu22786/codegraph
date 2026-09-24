@@ -32,6 +32,39 @@ class LanguageRegistryTest(unittest.TestCase):
         self.assertIsNone(languages.lang_for("archive.tar.gz"))
         self.assertIsNone(languages.lang_for("noext"))
 
+    def test_module_id_uses_package_after_leading_comments(self):
+        cases = (
+            ("service.go", "go", "// Package service handles requests.\n\npackage svc\n", "svc"),
+            (
+                "example.go",
+                "go",
+                "// Documentation mentions package fake.\npackage actual\n",
+                "actual",
+            ),
+            (
+                "example.go",
+                "go",
+                "// Documentation\rpackage fake\npackage actual\n",
+                "actual",
+            ),
+            (
+                "Calc.java",
+                "java",
+                "// Leading comment\rpackage com.example.calc;\rclass Calc {}\r",
+                "com.example.calc",
+            ),
+            (
+                "Calc.java",
+                "java",
+                "/**\n * Calculator API.\n */\npackage com.example.calc;\n",
+                "com.example.calc",
+            ),
+            ("src/Calc.java", "java", "class Calc {}\n", "src/Calc"),
+        )
+        for rel_path, lang, text, expected in cases:
+            with self.subTest(rel_path=rel_path):
+                self.assertEqual(languages.module_of(rel_path, lang, text), expected)
+
     def test_language_override(self):
         cfg = load_config(root=str(PROJ))
         cfg.language_map = {".md": "markdown"}
