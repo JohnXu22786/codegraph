@@ -74,6 +74,11 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
                     "language_map"):
             if key in data:
                 setattr(cfg, key, data[key])
+        if "incremental" in data and not isinstance(cfg.incremental, bool):
+            raise ValueError(
+                'config field "incremental" must be a boolean, got '
+                f'{cfg.incremental!r}'
+            )
         if "db_path" in data:
             cfg.db_path = data["db_path"]
         elif cfg.root != str(base_root):
