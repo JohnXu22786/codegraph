@@ -205,6 +205,14 @@ class QuickJavascriptTest(unittest.TestCase):
         self.assertIn(("web/index.serve", "Api"), calls)
         self.assertIn(("web/index.serve", "api.fetch"), calls)
 
+    def test_multiline_esm_named_import(self):
+        src = "import {\n  useFoo,\n} from './foo';\n"
+        scan = quick.quick_scan(src, "javascript")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [("./foo", ["useFoo"], "import", 1)],
+        )
+
     def test_esm_util(self):
         scan = _scan("web/util.ts")
         self.assertEqual(scan.symbols[0].qualname, "web/util.fmt")
