@@ -561,6 +561,8 @@ RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)
 RE_RS_TYPE = re.compile(r"^\s*(?:pub\s+)?(struct|enum)\s+(\w+)")
 RE_RS_TRAIT = re.compile(r"^\s*(?:pub\s+)?trait\s+(\w+)")
 RE_RS_IMPL = re.compile(r"^\s*(?:pub\s+)?(?:unsafe\s+)?impl\s+(?:<\s*[^>]*\s*>)?\s*(\w+)")
+RE_RS_CHAR = re.compile(
+    r"'(?:[^'\\\n]|\\(?:[nrt0\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}))'")
 
 
 def _rust_use_tree_parts(text):
@@ -639,6 +641,11 @@ def _rust_mask_comments(text, mask_strings=True, preserve_path_strings=False):
                     string = None
                     string_keep = False
                 index += 1
+            continue
+        char_match = RE_RS_CHAR.match(text, index)
+        if char_match:
+            blank(index, char_match.end())
+            index = char_match.end()
             continue
         raw_prefix = None
         if chars[index] == "r":

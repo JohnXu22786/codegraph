@@ -317,6 +317,27 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertEqual(by_q["Shape"].kind, "interface")
         self.assertEqual(by_q["Shape.area"].kind, "method")
 
+    def test_rust_char_literal_brace_does_not_extend_impl(self):
+        src = (
+            "impl Widget {\n"
+            "    fn render(&self) {\n"
+            "        let brace = '{';\n"
+            "        self.draw();\n"
+            "    }\n"
+            "}\n"
+            "fn standalone(_value: &'static str) {\n"
+            "    external_call();\n"
+            "}\n"
+        )
+        scan = quick.quick_scan(src, "rust")
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["Widget.render"].kind, "method")
+        self.assertEqual(by_q["standalone"].kind, "function")
+        self.assertEqual(by_q["standalone"].parent, "")
+        calls = {(call.caller, call.callee) for call in scan.calls}
+        self.assertIn(("Widget.render", "self.draw"), calls)
+        self.assertIn(("standalone", "external_call"), calls)
+
     def test_rust_public_mod_imports(self):
         src = "pub mod shared;\npub(crate) mod internal;\n"
         scan = quick.quick_scan(src, "rust")
