@@ -59,6 +59,19 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(cfg.max_file_kb, 128)
         self.assertEqual(cfg.engine, "deep")
 
+    def test_incremental_false_is_preserved(self):
+        (self.root / "codegraph.json").write_text(
+            json.dumps({"incremental": False}), encoding="utf-8",
+        )
+        self.assertFalse(load_config(root=str(self.root)).incremental)
+
+    def test_incremental_string_false_is_rejected(self):
+        (self.root / "codegraph.json").write_text(
+            json.dumps({"incremental": "false"}), encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ValueError, '"incremental" must be a boolean'):
+            load_config(root=str(self.root))
+
     def test_env_overrides_file(self):
         (self.root / "codegraph.json").write_text(
             json.dumps({"engine": "deep", "max_file_kb": 128}), encoding="utf-8",
