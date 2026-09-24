@@ -62,7 +62,9 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
     root_is_scoped = bool(root or env_root)
     cfg = default_config(base_root)
 
-    cfg_file = Path(config_path) if config_path else Path(cfg.root) / CONFIG_NAME
+    cfg_file = Path(config_path) if config_path is not None else Path(cfg.root) / CONFIG_NAME
+    if config_path is not None and not cfg_file.is_file():
+        raise FileNotFoundError(f"configuration file not found: {cfg_file}")
     if cfg_file.is_file():
         data = json.loads(cfg_file.read_text(encoding="utf-8"))
         if "root" in data and not root_is_scoped:

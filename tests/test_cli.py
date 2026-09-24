@@ -121,6 +121,14 @@ class CliSmokeTest(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertTrue(proc.stderr.decode("utf-8", "replace"))
 
+    def test_missing_explicit_config_is_reported(self):
+        config_path = self.root.parent / "missing.json"
+        proc = _run(["status", "--root", str(self.root), "--config", str(config_path)])
+        self.assertEqual(proc.returncode, 1)
+        stderr = proc.stderr.decode("utf-8", "replace")
+        self.assertIn("cannot load configuration", stderr)
+        self.assertIn(str(config_path), stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
