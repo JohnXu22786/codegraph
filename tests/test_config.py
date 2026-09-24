@@ -18,7 +18,7 @@ from codegraph.scanner.walk import discover_files
 
 class DefaultConfigTest(unittest.TestCase):
     def test_defaults_shape(self):
-        cfg = default_config("C:/proj")
+        cfg = default_config("C:\\proj" if os.name == "nt" else "/C:/proj")
         self.assertEqual(cfg.root, "C:\\proj" if os.name == "nt" else "/C:/proj")
         self.assertIn(".cg", cfg.exclude)
         self.assertEqual(cfg.max_file_kb, 512)
