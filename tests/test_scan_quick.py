@@ -53,6 +53,52 @@ class QuickPythonTest(unittest.TestCase):
         from_pkg = next(i for i in scan.imports if i.module == "pkg")
         self.assertEqual(from_pkg.names, ["pricing"])
 
+    def test_comma_separated_imports(self):
+        scan = quick.quick_scan("\nimport os, sys as system\n", "python")
+        self.assertEqual(
+            [(i.module, i.kind, i.line) for i in scan.imports],
+            [("os", "module", 2), ("sys", "module", 2)],
+        )
+
+    def test_backslash_continued_comma_separated_imports(self):
+        scan = quick.quick_scan("import os, \\\n    sys as system\n", "python")
+        self.assertEqual(
+            [(i.module, i.kind, i.line) for i in scan.imports],
+            [("os", "module", 1), ("sys", "module", 1)],
+        )
+
+    def test_backslash_continuations_at_other_import_boundaries(self):
+        sources = (
+            "import \\\n    os, sys as system\n",
+            "import os \\\n, sys\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                scan = quick.quick_scan(source, "python")
+                self.assertEqual(
+                    [(i.module, i.kind, i.line) for i in scan.imports],
+                    [("os", "module", 1), ("sys", "module", 1)],
+                )
+
+    def test_form_feed_whitespace_in_imports(self):
+        scan = quick.quick_scan("import\f os,\f sys\n", "python")
+        self.assertEqual(
+            [(i.module, i.kind, i.line) for i in scan.imports],
+            [("os", "module", 1), ("sys", "module", 1)],
+        )
+
+    def test_backslash_continuation_preserves_dotted_module_names(self):
+        sources = (
+            "import foo\\\n.bar\n",
+            "import foo.\\\nbar\n",
+            "import foo\\\n    .bar\n",
+            "import foo.\\\n    bar\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                scan = quick.quick_scan(source, "python")
+                self.assertEqual([i.module for i in scan.imports], ["foo.bar"])
+
     def test_cart_calls(self):
         scan = _scan("pkg/cart.py")
         calls = {(c.caller, c.callee) for c in scan.calls}
