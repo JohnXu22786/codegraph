@@ -37,6 +37,13 @@ _GRAMMAR_MODULES = {
     "rust": "tree_sitter_rust",
 }
 
+_GO_SCOPE_NODES = {
+    "block", "function_declaration", "method_declaration", "func_literal",
+    "for_statement", "if_statement", "expression_switch_statement",
+    "type_switch_statement", "select_statement", "expression_case",
+    "type_case", "communication_case",
+}
+
 _language_cache = {}
 
 
@@ -183,12 +190,27 @@ def _node_text(node, source: bytes) -> str:
     return source[start:end].decode("utf-8", "replace")
 
 
+def _go_generic_function_names(node, source: bytes) -> set[str]:
+    names = set()
+    for child in node.children:
+        if child.type != "function_declaration":
+            continue
+        if child.child_by_field_name("type_parameters") is None:
+            continue
+        name = child.child_by_field_name("name")
+        if name is not None:
+            names.add(_node_text(name, source).strip())
+    return names
+
+
 class _Walker:
     def __init__(self, lang, module, source: bytes, lines):
         self.lang = lang
         self.module = module
         self.source = source
         self.lines = lines
+        self.go_generic_functions = set()
+        self.go_value_scopes = [set()]
         self.stack = []  # (kind, qualname) of open containers
         self.items = []  # (start, depth, SymbolRec)
         self.raw_calls = []  # (callee, line)
@@ -229,6 +251,31 @@ class _Walker:
                 return name
         return ""
 
+    def _go_declared_values(self, node):
+        if node.type in ("parameter_declaration", "var_spec", "const_spec"):
+            return {
+                _node_text(name, self.source).strip()
+                for name in node.children_by_field_name("name")
+                if _node_text(name, self.source).strip() != "_"
+            }
+        if node.type not in ("short_var_declaration", "range_clause"):
+            return set()
+        left = node.child_by_field_name("left")
+        names = set()
+        pending = [left] if left is not None else []
+        while pending:
+            current = pending.pop()
+            if current.type == "identifier":
+                name = _node_text(current, self.source).strip()
+                if name != "_":
+                    names.add(name)
+            else:
+                pending.extend(current.children)
+        return names
+
+    def _go_value_is_bound(self, name):
+        return any(name in scope for scope in self.go_value_scopes)
+
     def _signature_of(self, node):
         for field in ("parameters", "formal_parameters"):
             params = node.child_by_field_name(field)
@@ -258,6 +305,9 @@ class _Walker:
         t = node.type
         decl_kind = _DECL[self.lang].get(t)
         pushed = False
+        go_scope = self.lang == "go" and t in _GO_SCOPE_NODES
+        if go_scope:
+            self.go_value_scopes.append(set())
         if decl_kind is not None:
             kind, name, doc = self._declare(node, t, decl_kind)
             if name:
@@ -274,6 +324,10 @@ class _Walker:
                 self.imports.append(imp)
         for child in node.children:
             self.walk(child)
+        if self.lang == "go":
+            self.go_value_scopes[-1].update(self._go_declared_values(node))
+        if go_scope:
+            self.go_value_scopes.pop()
         if pushed:
             self.stack.pop()
 
@@ -324,6 +378,25 @@ class _Walker:
     def _record_call(self, node):
         text = _node_text(node, self.source)
         cut = text.split("(", 1)[0]
+        function = node.child_by_field_name("function")
+        if self.lang == "typescript" and function is not None \
+                and node.child_by_field_name("type_arguments") is not None:
+            cut = _node_text(function, self.source)
+        elif self.lang == "rust" and function is not None \
+                and function.type == "generic_function":
+            target = function.child_by_field_name("function")
+            if target is not None:
+                cut = _node_text(target, self.source)
+        elif self.lang == "go" and function is not None:
+            # Go grammars may expose foo[T]() as indexing; avoid guessing selectors.
+            target = function
+            if function.type == "index_expression":
+                target = function.child_by_field_name("operand")
+            if target is not None and target.type == "identifier" \
+                    and (callee := _node_text(target, self.source).strip()) \
+                    in self.go_generic_functions \
+                    and not self._go_value_is_bound(callee):
+                cut = callee
         m = re.search(r"([A-Za-z_$][\w$]*(?:(?:::|\.)[A-Za-z_$][\w$]*)*)$", cut)
         if not m:
             return
@@ -362,6 +435,10 @@ def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
     lines = text.splitlines()
 
     walker = _Walker(lang, module, source, lines)
+    if lang == "go":
+        walker.go_generic_functions.update(
+            _go_generic_function_names(tree.root_node, source)
+        )
     for child in tree.root_node.children:
         walker.walk(child)
 
