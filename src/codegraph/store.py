@@ -170,6 +170,12 @@ class IndexStore:
         return {r["path"]: r["digest"] for r in self.conn.execute("SELECT path, digest FROM files")}
 
     def remove_file(self, path):
+        if self.conn.in_transaction:
+            return self._remove_file(path)
+        with self.transaction():
+            return self._remove_file(path)
+
+    def _remove_file(self, path):
         row = self.conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
         if row is None:
             return {"file_id": None, "symbol_names": set(),
