@@ -708,7 +708,7 @@ def _rust_all_root_paths(store: IndexStore):
             for relative_path in relative_paths:
                 if not isinstance(relative_path, str):
                     continue
-                manifest = project_root / relative_path
+                manifest = (project_root / relative_path).resolve()
                 if manifest.is_file():
                     manifests.append(manifest)
             manifests.sort()
@@ -717,7 +717,6 @@ def _rust_all_root_paths(store: IndexStore):
                 manifests = sorted(project_root.rglob("Cargo.toml"))
             except OSError:
                 manifests = []
-    store._rust_cargo_manifests = bool(manifests)
     manifest_data = {}
     workspace_editions = {}
     for manifest in manifests:
@@ -726,6 +725,16 @@ def _rust_all_root_paths(store: IndexStore):
         workspace_edition = _rust_cargo_workspace_edition(data)
         if workspace_edition is not None:
             workspace_editions[manifest] = workspace_edition
+    manifest_targets = {
+        manifest: _rust_cargo_target_paths(manifest, data)
+        for manifest, data in manifest_data.items()
+    }
+    # Ancestor metadata only disables source-tree roots when its targets are in scope.
+    store._rust_cargo_manifests = any(
+        manifest.is_relative_to(project_root) or
+        any(path.is_relative_to(project_root) for path in target_paths)
+        for manifest, target_paths in manifest_targets.items()
+    )
 
     def inherited_workspace_edition(manifest):
         directory = manifest.parent
@@ -733,18 +742,19 @@ def _rust_all_root_paths(store: IndexStore):
             edition = workspace_editions.get(directory / "Cargo.toml")
             if edition is not None:
                 return edition
-            if directory == project_root:
+            if directory == directory.parent:
                 return None
             directory = directory.parent
 
-    for manifest, data in manifest_data.items():
-        for path in _rust_cargo_target_paths(manifest, data):
+    for manifest, target_paths in manifest_targets.items():
+        for path in target_paths:
             root_path = add(path)
             if root_path is not None:
                 editions[root_path] = _rust_cargo_edition(
-                    data, inherited_workspace_edition(manifest))
+                    manifest_data[manifest],
+                    inherited_workspace_edition(manifest))
 
-    if not manifests:
+    if not store._rust_cargo_manifests:
         # In source trees without Cargo metadata, only root-level markers and
         # markers directly below a source directory are conventional roots. A
         # nested foo/main.rs or foo/lib.rs is therefore a normal module file.

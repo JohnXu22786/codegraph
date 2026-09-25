@@ -671,6 +671,70 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_parent_workspace_only_manifest_does_not_hide_rust_root(self):
+        """An unrelated ancestor workspace cannot disable source-root fallback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            root = workspace / "source-tree"
+            src = root / "src"
+            src.mkdir(parents=True)
+            workspace.joinpath("Cargo.toml").write_text(
+                "[workspace]\nmembers = [\"other-member\"]\n\n"
+                "[workspace.package]\nedition = \"2021\"\n",
+                encoding="utf-8",
+            )
+            src.joinpath("lib.rs").write_text(
+                "use crate::root_fn;\nfn root_fn() {}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                target = store.find_import(module="crate::root_fn")
+                self.assertEqual(
+                    store.file_by_id(target["target_id"])["path"],
+                    "src/lib.rs",
+                )
+            finally:
+                store.close()
+
+    def test_parent_package_with_external_target_does_not_hide_rust_root(self):
+        """An ancestor package target outside the index cannot hide its roots."""
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            package_src = package / "src"
+            package_src.mkdir()
+            package.joinpath("Cargo.toml").write_text(
+                "[package]\nname = \"outer\"\nversion = \"0.1.0\"\n",
+                encoding="utf-8",
+            )
+            package_src.joinpath("lib.rs").write_text(
+                "fn outer_fn() {}\n", encoding="utf-8")
+
+            root = package / "nested-source-tree"
+            src = root / "src"
+            src.mkdir(parents=True)
+            src.joinpath("lib.rs").write_text(
+                "use crate::root_fn;\nfn root_fn() {}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                target = store.find_import(module="crate::root_fn")
+                self.assertEqual(
+                    store.file_by_id(target["target_id"])["path"],
+                    "src/lib.rs",
+                )
+            finally:
+                store.close()
+
     def test_rust_cargo_root_changes_re_resolve_incrementally(self):
         """Changing Cargo root metadata must invalidate old import edges."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1005,6 +1069,47 @@ class ResolverTest(unittest.TestCase):
             with patch("codegraph.resolver.tomllib", None):
                 build_index(cfg, force=True)
                 assert_target()
+
+    def test_rust_member_root_inherits_parent_workspace_edition(self):
+        """Indexing a member alone still applies its parent workspace edition."""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            member = workspace / "member"
+            src = member / "src"
+            (src / "child").mkdir(parents=True)
+            workspace.joinpath("Cargo.toml").write_text(
+                "[workspace]\nmembers = [\"member\"]\n\n"
+                "[workspace.package]\nedition = \"2021\"\n",
+                encoding="utf-8",
+            )
+            member.joinpath("Cargo.toml").write_text(
+                "[package]\nname = \"member\"\nversion = \"0.1.0\"\n"
+                "edition.workspace = true\n",
+                encoding="utf-8",
+            )
+            src.joinpath("lib.rs").write_text(
+                "mod child;\nmod inner;\n", encoding="utf-8")
+            src.joinpath("child.rs").write_text(
+                "mod inner;\nuse inner::foo;\nfn call() { foo(); }\n",
+                encoding="utf-8",
+            )
+            src.joinpath("inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+            src.joinpath("child", "inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(member))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                target = store.find_import(module="inner::foo")
+                self.assertEqual(
+                    store.file_by_id(target["target_id"])["path"],
+                    "src/child/inner.rs",
+                )
+            finally:
+                store.close()
 
     def test_rust_2015_bare_use_does_not_fallback_to_current_module(self):
         """Rust 2015 bare use paths stay crate-relative without a root."""
