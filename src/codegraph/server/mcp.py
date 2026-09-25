@@ -63,9 +63,10 @@ def _dispatch(msg: dict, ctx: ToolContext, log_stream) -> "dict | None":
                 "result": {"tools": tool_definitions()}}
     if method == "tools/call":
         name = params.get("name", "")
-        args = params.get("arguments") or {}
+        args = params.get("arguments", {})
         if not isinstance(args, dict):
-            args = {}
+            return _error(msg_id, -32602,
+                          "Invalid params: tool arguments must be an object")
         if name not in {t["name"] for t in tool_definitions()}:
             return _error(msg_id, -32602, f"Unknown tool: {name}")
         try:

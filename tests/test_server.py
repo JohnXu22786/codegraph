@@ -104,6 +104,34 @@ class McpServerTest(unittest.TestCase):
         self.assertTrue(result["isError"])
         self.assertIn("symbol", result["content"][0]["text"])
 
+    def test_non_object_arguments_do_not_run_reindex(self):
+        malformed = (None, [], ["force"], "force", 0, False)
+        messages = [
+            self._msg(i, "tools/call", {"name": "reindex", "arguments": args})
+            for i, args in enumerate(malformed, start=1)
+        ]
+
+        with patch("codegraph.server.handlers.build_index") as build_index:
+            replies = self._run(messages)
+
+        self.assertEqual(len(replies), len(malformed))
+        for reply in replies:
+            self.assertEqual(reply["error"]["code"], -32602)
+            self.assertEqual(
+                reply["error"]["message"],
+                "Invalid params: tool arguments must be an object",
+            )
+        build_index.assert_not_called()
+
+    def test_omitted_arguments_default_to_empty_object(self):
+        replies = self._run([
+            self._msg(1, "tools/call", {"name": "overview"}),
+        ])
+
+        result = replies[0]["result"]
+        self.assertFalse(result["isError"], result)
+        self.assertEqual(result["content"][1]["json"]["files"], 14)
+
     def test_unknown_method(self):
         replies = self._run([self._msg(1, "mystery/method")])
         self.assertEqual(replies[0]["error"]["code"], -32601)
