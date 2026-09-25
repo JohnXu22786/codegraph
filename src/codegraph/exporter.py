@@ -31,7 +31,7 @@ def export_json(store: IndexStore) -> dict:
 
 def _esc(text) -> str:
     """Escape a string for use inside a DOT double-quoted label."""
-    return text.replace("\\", "\\\\").replace('"', '\\"')
+    return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
 def export_dot(store: IndexStore) -> str:
