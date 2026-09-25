@@ -170,6 +170,56 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_parent_cargo_workspace_change_re_resolves_member_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            member = workspace / "member"
+            src = member / "src"
+            (src / "child").mkdir(parents=True)
+            workspace_manifest = workspace / "Cargo.toml"
+            workspace_manifest.write_text(
+                "[workspace]\nmembers = [\"member\"]\n\n"
+                "[workspace.package]\nedition = \"2015\"\n",
+                encoding="utf-8",
+            )
+            (member / "Cargo.toml").write_text(
+                "[package]\nname = \"member\"\nversion = \"0.1.0\"\n"
+                "edition.workspace = true\n",
+                encoding="utf-8",
+            )
+            (src / "lib.rs").write_text(
+                "mod child;\nmod inner;\n", encoding="utf-8")
+            (src / "child.rs").write_text(
+                "mod inner;\nuse inner::foo;\nfn call() { foo(); }\n",
+                encoding="utf-8",
+            )
+            (src / "inner.rs").write_text("fn foo() {}\n", encoding="utf-8")
+            (src / "child" / "inner.rs").write_text(
+                "fn foo() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(member))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            workspace_manifest.write_text(
+                "[workspace]\nmembers = [\"member\"]\n\n"
+                "[workspace.package]\nedition = \"2021\"\n",
+                encoding="utf-8",
+            )
+            report = build_index(cfg)
+
+            self.assertEqual(report.files_changed, 0)
+            self.assertGreater(report.files_skipped, 0)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                target = store.find_import(module="inner::foo")
+                self.assertEqual(
+                    store.file_by_id(target["target_id"])["path"],
+                    "src/child/inner.rs",
+                )
+            finally:
+                store.close()
+
     def test_resolver_version_change_re_resolves_go_dotted_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

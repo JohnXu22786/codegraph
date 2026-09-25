@@ -16,7 +16,7 @@ from .scanner import deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
-_RESOLVER_VERSION = 4
+_RESOLVER_VERSION = 5
 
 
 @dataclass
@@ -41,24 +41,33 @@ def _cargo_manifest_paths(root: Path, source_paths=None) -> list:
     root = Path(root).resolve()
     if source_paths is None:
         try:
-            return sorted(root.rglob("Cargo.toml"))
+            manifests = set(root.rglob("Cargo.toml"))
         except OSError:
-            return []
+            manifests = set()
+        directory = root
+        while True:
+            candidate = directory / "Cargo.toml"
+            if candidate.is_file():
+                manifests.add(candidate)
+            if directory == directory.parent:
+                break
+            directory = directory.parent
+        return sorted(manifests)
 
     manifests = set()
     for source in source_paths:
         path = Path(source)
         full_path = path if path.is_absolute() else root / path
+        try:
+            full_path.relative_to(root)
+        except ValueError:
+            continue
         directory = full_path.parent
         while True:
-            try:
-                directory.relative_to(root)
-            except ValueError:
-                break
             candidate = directory / "Cargo.toml"
             if candidate.is_file():
                 manifests.add(candidate)
-            if directory == root:
+            if directory == directory.parent:
                 break
             directory = directory.parent
     return sorted(manifests)
@@ -79,7 +88,7 @@ def _cargo_manifest_state(root: Path, source_paths=None) -> dict:
             digest = None
         else:
             digest = _digest(data)
-        state[manifest.relative_to(root).as_posix()] = digest
+        state[Path(os.path.relpath(manifest, root)).as_posix()] = digest
     return state
 
 
@@ -173,7 +182,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     store.set_meta(
         "cargo_manifest_paths",
         json.dumps([
-            manifest.relative_to(root.resolve()).as_posix()
+            Path(os.path.relpath(manifest, root.resolve())).as_posix()
             for manifest in cargo_manifest_paths
         ]),
     )
