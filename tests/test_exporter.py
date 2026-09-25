@@ -42,6 +42,26 @@ class ExportTest(unittest.TestCase):
         statements = [s for s in dot.splitlines() if s.strip().endswith(";")]
         self.assertGreater(len(statements), 10)
 
+    def test_dot_escapes_newline_in_file_path_labels(self):
+        path = "src/line\nbreak.py"
+        file_path = self.root / path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text("\n", encoding="utf-8")
+
+        row = self.store.conn.execute(
+            "SELECT id FROM files ORDER BY path LIMIT 1"
+        ).fetchone()
+        self.store.conn.execute(
+            "UPDATE files SET path = ? WHERE id = ?", (path, row["id"])
+        )
+
+        dot = export_dot(self.store)
+        escaped_path = r"src/line\nbreak.py"
+        self.assertIn(f'  f{row["id"]} [label="{escaped_path}"];', dot)
+        self.assertIn(
+            f'  subgraph cluster_{row["id"]} {{ label="{escaped_path}";', dot
+        )
+
     def test_dot_import_file_nodes_are_declared_and_labeled(self):
         dot = export_dot(self.store)
         file_paths = {
