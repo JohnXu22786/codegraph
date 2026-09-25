@@ -68,6 +68,21 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(self.store.count_rows("symbols"), 0)
         self.assertEqual(self.store.count_rows("files"), 0)
 
+    def test_remove_missing_file_does_not_take_write_lock(self):
+        blocker = sqlite3.connect(str(self.db), timeout=0)
+        self.store.conn.execute("PRAGMA busy_timeout = 0")
+        blocker.execute("BEGIN IMMEDIATE")
+        try:
+            self.assertEqual(
+                self.store.remove_file("missing.py"),
+                {"file_id": None, "symbol_names": set(),
+                 "call_ids": set(), "import_ids": set()},
+            )
+            self.assertFalse(self.store.conn.in_transaction)
+        finally:
+            blocker.rollback()
+            blocker.close()
+
     def test_standalone_remove_file_rolls_back_on_failure(self):
         target_id = self.store.upsert_file("a.py", "python", 10, "d1", 3)
         other_id = self.store.upsert_file("b.py", "python", 12, "d2", 4)
@@ -133,6 +148,32 @@ class StoreTest(unittest.TestCase):
             "SELECT rowid, qualname, name, doc, signature FROM sym_fts ORDER BY rowid"
         )]
         self.assertEqual(after, before)
+
+    def test_standalone_remove_file_rolls_back_on_commit_failure(self):
+        fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
+        with self.store.transaction():
+            self.store.replace_file_payload(fid, _sample_scan("a.py"))
+        self.store.conn.execute(
+            "CREATE TABLE removal_guard_parent (id INTEGER PRIMARY KEY)"
+        )
+        self.store.conn.execute(
+            "CREATE TABLE removal_guard (parent_id INTEGER REFERENCES "
+            "removal_guard_parent(id) DEFERRABLE INITIALLY DEFERRED)"
+        )
+        self.store.conn.execute(
+            "CREATE TRIGGER fail_remove_at_commit AFTER DELETE ON files "
+            "WHEN OLD.path = 'a.py' BEGIN "
+            "INSERT INTO removal_guard(parent_id) VALUES (999); END"
+        )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "FOREIGN KEY"):
+            self.store.remove_file("a.py")
+
+        self.assertFalse(self.store.conn.in_transaction)
+        self.assertIsNotNone(self.store.file_by_path("a.py"))
+        self.assertEqual(self.store.count_rows("symbols"), 1)
+        self.assertEqual(self.store.count_rows("removal_guard"), 0)
+        self.assertEqual(len(self.store.search("hello")), 1)
 
     def test_fts_rows_follow_symbols(self):
         fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
