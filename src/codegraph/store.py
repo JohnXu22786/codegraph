@@ -127,11 +127,10 @@ class IndexStore:
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             yield
-        except Exception:
+            self.conn.commit()
+        except BaseException:
             self.conn.rollback()
             raise
-        else:
-            self.conn.commit()
 
     # -- files ----------------------------------------------------------------
 
@@ -170,6 +169,15 @@ class IndexStore:
         return {r["path"]: r["digest"] for r in self.conn.execute("SELECT path, digest FROM files")}
 
     def remove_file(self, path):
+        if self.conn.in_transaction:
+            return self._remove_file(path)
+        if self.file_by_path(path) is None:
+            return {"file_id": None, "symbol_names": set(),
+                    "call_ids": set(), "import_ids": set()}
+        with self.transaction():
+            return self._remove_file(path)
+
+    def _remove_file(self, path):
         row = self.conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()
         if row is None:
             return {"file_id": None, "symbol_names": set(),

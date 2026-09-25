@@ -68,6 +68,113 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(self.store.count_rows("symbols"), 0)
         self.assertEqual(self.store.count_rows("files"), 0)
 
+    def test_remove_missing_file_does_not_take_write_lock(self):
+        blocker = sqlite3.connect(str(self.db), timeout=0)
+        self.store.conn.execute("PRAGMA busy_timeout = 0")
+        blocker.execute("BEGIN IMMEDIATE")
+        try:
+            self.assertEqual(
+                self.store.remove_file("missing.py"),
+                {"file_id": None, "symbol_names": set(),
+                 "call_ids": set(), "import_ids": set()},
+            )
+            self.assertFalse(self.store.conn.in_transaction)
+        finally:
+            blocker.rollback()
+            blocker.close()
+
+    def test_standalone_remove_file_rolls_back_on_failure(self):
+        target_id = self.store.upsert_file("a.py", "python", 10, "d1", 3)
+        other_id = self.store.upsert_file("b.py", "python", 12, "d2", 4)
+        target_symbol = self.store.conn.execute(
+            "INSERT INTO symbols(file_id, kind, name, qualname, start_line, end_line) "
+            "VALUES(?, 'function', 'target', 'a.target', 1, 2)",
+            (target_id,),
+        ).lastrowid
+        other_symbol = self.store.conn.execute(
+            "INSERT INTO symbols(file_id, kind, name, qualname, start_line, end_line) "
+            "VALUES(?, 'function', 'other', 'b.other', 1, 2)",
+            (other_id,),
+        ).lastrowid
+        self.store.conn.execute(
+            "INSERT INTO sym_fts(rowid, qualname, name, doc, signature) "
+            "VALUES(?, 'a.target', 'target', '', '')",
+            (target_symbol,),
+        )
+        self.store.conn.execute(
+            "INSERT INTO calls(caller_id, caller_name, callee, callee_id, file_id, line) "
+            "VALUES(?, 'target', 'other', ?, ?, 3)",
+            (target_symbol, other_symbol, target_id),
+        )
+        self.store.conn.execute(
+            "INSERT INTO calls(caller_id, caller_name, callee, callee_id, file_id, line) "
+            "VALUES(?, 'other', 'target', ?, ?, 4)",
+            (other_symbol, target_symbol, other_id),
+        )
+        self.store.conn.execute(
+            "INSERT INTO imports(file_id, module, target_id, line) VALUES(?, 'b', ?, 5)",
+            (target_id, other_id),
+        )
+        self.store.conn.execute(
+            "INSERT INTO imports(file_id, module, target_id, line) VALUES(?, 'a', ?, 6)",
+            (other_id, target_id),
+        )
+        tables = ("files", "symbols", "calls", "imports")
+        before = {
+            table: [tuple(row) for row in self.store.conn.execute(
+                f"SELECT * FROM {table} ORDER BY id"
+            )]
+            for table in tables
+        }
+        before["sym_fts"] = [tuple(row) for row in self.store.conn.execute(
+            "SELECT rowid, qualname, name, doc, signature FROM sym_fts ORDER BY rowid"
+        )]
+        self.store.conn.execute(
+            "CREATE TRIGGER fail_file_removal BEFORE DELETE ON files "
+            "WHEN OLD.path = 'a.py' BEGIN "
+            "SELECT RAISE(ABORT, 'forced removal failure'); END"
+        )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "forced removal failure"):
+            self.store.remove_file("a.py")
+
+        after = {
+            table: [tuple(row) for row in self.store.conn.execute(
+                f"SELECT * FROM {table} ORDER BY id"
+            )]
+            for table in tables
+        }
+        after["sym_fts"] = [tuple(row) for row in self.store.conn.execute(
+            "SELECT rowid, qualname, name, doc, signature FROM sym_fts ORDER BY rowid"
+        )]
+        self.assertEqual(after, before)
+
+    def test_standalone_remove_file_rolls_back_on_commit_failure(self):
+        fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
+        with self.store.transaction():
+            self.store.replace_file_payload(fid, _sample_scan("a.py"))
+        self.store.conn.execute(
+            "CREATE TABLE removal_guard_parent (id INTEGER PRIMARY KEY)"
+        )
+        self.store.conn.execute(
+            "CREATE TABLE removal_guard (parent_id INTEGER REFERENCES "
+            "removal_guard_parent(id) DEFERRABLE INITIALLY DEFERRED)"
+        )
+        self.store.conn.execute(
+            "CREATE TRIGGER fail_remove_at_commit AFTER DELETE ON files "
+            "WHEN OLD.path = 'a.py' BEGIN "
+            "INSERT INTO removal_guard(parent_id) VALUES (999); END"
+        )
+
+        with self.assertRaisesRegex(sqlite3.IntegrityError, "FOREIGN KEY"):
+            self.store.remove_file("a.py")
+
+        self.assertFalse(self.store.conn.in_transaction)
+        self.assertIsNotNone(self.store.file_by_path("a.py"))
+        self.assertEqual(self.store.count_rows("symbols"), 1)
+        self.assertEqual(self.store.count_rows("removal_guard"), 0)
+        self.assertEqual(len(self.store.search("hello")), 1)
+
     def test_fts_rows_follow_symbols(self):
         fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
         with self.store.transaction():
