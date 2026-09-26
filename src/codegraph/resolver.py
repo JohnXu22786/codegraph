@@ -1180,19 +1180,26 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
 
     # --- go / java: try the module text as a path under the root ----------
     if lang == "go":
-        cands = []
         for target in _go_package_dirs(root, module_text):
+            cands = []
             if target.name:
                 cands.extend(target.with_name(target.name + ext)
                              for ext in _EXT_BY_LANG[lang])
             cands.append(target / "main.go")
+            for cand in cands:
+                rel = rel_of(cand)
+                row = (
+                    store.file_by_path(rel.as_posix())
+                    if rel is not None else None
+                )
+                if row is not None and row["lang"] == "go":
+                    return [rel]
             package_dir = rel_of(target)
             if package_dir is not None:
-                cands.extend(
-                    path for _, path in _go_package_files(store, package_dir)
-                )
-        return [rel for cand in dict.fromkeys(cands)
-                if (rel := rel_of(cand)) is not None]
+                package_files = _go_package_files(store, package_dir)
+                if package_files:
+                    return [package_files[0][1]]
+        return []
 
     if module_text.endswith(".*"):
         package_or_type = module_text[:-2]

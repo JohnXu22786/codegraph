@@ -272,6 +272,14 @@ class ResolverTest(unittest.TestCase):
                 self.assertIsNotNone(area_id)
                 self.assertEqual(store.symbol_by_id(add_id).qualname, "math.Add")
                 self.assertEqual(store.symbol_by_id(area_id).qualname, "math.Area")
+                resolved_calls = {
+                    row["callee_id"] for row in store.conn.execute(
+                        "SELECT callee_id FROM calls WHERE file_id = ?",
+                        (main_id,),
+                    )
+                }
+                self.assertIn(add_id, resolved_calls)
+                self.assertIn(area_id, resolved_calls)
             finally:
                 store.close()
 
