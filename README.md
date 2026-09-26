@@ -37,10 +37,28 @@ pip install -e .
 
 # Optional: install tree-sitter grammar packages for markedly better parse precision
 pip install -e ".[treesitter]"
+```
 
-# Option B: use directly from the repo without installing
-set PYTHONPATH=src        # Windows
-export PYTHONPATH=src     # Linux/macOS
+Option B, without installing from the repo (run from the repository root):
+
+Windows Command Prompt:
+
+```cmd
+set PYTHONPATH=src
+python -m codegraph --help
+```
+
+Windows PowerShell:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m codegraph --help
+```
+
+Linux/macOS:
+
+```sh
+export PYTHONPATH=src
 python -m codegraph --help
 ```
 
