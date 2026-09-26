@@ -346,6 +346,75 @@ class ResolverTest(unittest.TestCase):
                 finally:
                     store.close()
 
+    def test_aliased_class_member_calls_resolve_with_duplicate_members(self):
+        cases = (
+            {
+                "lang": "python",
+                "importer": "app.py",
+                "target": "pkg/mod.py",
+                "other": "pkg/other.py",
+                "statement": "from pkg.mod import Thing as T\n",
+                "target_source": (
+                    "class Thing:\n    def run(self): pass\n"
+                    "class Other:\n    def run(self): pass\n"
+                ),
+                "other_source": "class OtherThing:\n    def run(self): pass\n",
+                "app_body": "def caller():\n    T.run()\n",
+                "call": "T.run",
+                "expected": "pkg.mod.Thing.run",
+            },
+            {
+                "lang": "javascript",
+                "importer": "app.js",
+                "target": "util.js",
+                "other": "other.js",
+                "statement": "import { Thing as T } from './util.js';\n",
+                "target_source": (
+                    "export class Thing {\n  static run() {}\n}\n"
+                    "export class Other {\n  static run() {}\n}\n"
+                ),
+                "other_source": "export class OtherThing { static run() {} }\n",
+                "app_body": "function caller() { T.run(); }\n",
+                "call": "T.run",
+                "expected": "util.Thing.run",
+            },
+        )
+        for case in cases:
+            for engine in ("quick", "deep", "auto"):
+                with self.subTest(lang=case["lang"], engine=engine):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        root = Path(tmp)
+                        if case["lang"] == "python":
+                            (root / "pkg").mkdir()
+                            (root / "pkg" / "__init__.py").write_text(
+                                "", encoding="utf-8")
+                        (root / case["importer"]).write_text(
+                            case["statement"] + case["app_body"],
+                            encoding="utf-8",
+                        )
+                        target = root / case["target"]
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(case["target_source"], encoding="utf-8")
+                        (root / case["other"]).write_text(
+                            case["other_source"], encoding="utf-8")
+
+                        cfg = load_config(root=str(root))
+                        cfg.engine = engine
+                        build_index(cfg)
+                        store = IndexStore(str(cfg.db_path))
+                        try:
+                            app_id = store.file_by_path(case["importer"])["id"]
+                            target_id = resolve_callee(
+                                store, app_id, case["call"]
+                            )
+                            self.assertIsNotNone(target_id)
+                            self.assertEqual(
+                                store.symbol_by_id(target_id)["qualname"],
+                                case["expected"],
+                            )
+                        finally:
+                            store.close()
+
     def test_javascript_default_import_resolves_default_symbol(self):
         for engine in ("quick", "deep", "auto"):
             with tempfile.TemporaryDirectory() as tmp:

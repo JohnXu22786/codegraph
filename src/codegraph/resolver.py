@@ -380,14 +380,18 @@ def _python_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
             if " as " not in binding:
                 continue
             source_name, local_name = binding.split(" as ", 1)
-            if callee_text != local_name.strip():
+            local_name = local_name.strip()
+            if callee_text == local_name:
+                member_path = ""
+            elif callee_text.startswith(local_name + "."):
+                member_path = callee_text[len(local_name) + 1:]
+            else:
                 continue
-            rows = store.conn.execute(
-                "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
-                (imp["target_id"], source_name.strip()),
-            ).fetchall()
-            if len(rows) == 1:
-                return rows[0]["id"]
+            target = _aliased_symbol_target(
+                store, imp["target_id"], source_name.strip(), member_path
+            )
+            if target is not None:
+                return target
     return None
 
 
@@ -403,22 +407,47 @@ def _javascript_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
             if " as " not in binding:
                 continue
             source_name, local_name = binding.split(" as ", 1)
-            if callee_text != local_name.strip():
-                continue
-            if source_name.strip() == "default":
-                rows = store.conn.execute(
-                    "SELECT id FROM symbols WHERE file_id = ? "
-                    "AND default_export = 1 ORDER BY id",
-                    (imp["target_id"],),
-                ).fetchall()
+            local_name = local_name.strip()
+            if callee_text == local_name:
+                member_path = ""
+            elif callee_text.startswith(local_name + "."):
+                member_path = callee_text[len(local_name) + 1:]
             else:
-                rows = store.conn.execute(
-                    "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
-                    (imp["target_id"], source_name.strip()),
-                ).fetchall()
-            if len(rows) == 1:
-                return rows[0]["id"]
+                continue
+            target = _aliased_symbol_target(
+                store, imp["target_id"], source_name.strip(), member_path
+            )
+            if target is not None:
+                return target
     return None
+
+
+def _aliased_symbol_target(store: IndexStore, file_id: int, source_name: str,
+                           member_path: str = ""):
+    if source_name == "default":
+        rows = store.conn.execute(
+            "SELECT id, qualname FROM symbols WHERE file_id = ? "
+            "AND default_export = 1 ORDER BY id",
+            (file_id,),
+        ).fetchall()
+    else:
+        rows = store.conn.execute(
+            "SELECT id, qualname FROM symbols WHERE file_id = ? AND name = ?",
+            (file_id, source_name),
+        ).fetchall()
+    if len(rows) != 1:
+        return None
+    symbol = rows[0]
+    for member in filter(None, member_path.split(".")):
+        rows = store.conn.execute(
+            "SELECT id, qualname FROM symbols WHERE file_id = ? "
+            "AND parent = ? AND name = ? ORDER BY id",
+            (file_id, symbol["qualname"], member),
+        ).fetchall()
+        if len(rows) != 1:
+            return None
+        symbol = rows[0]
+    return symbol["id"]
 
 
 def _rust_module_dir(file_path: Path, crate_dir: Path, crate_root=None) -> Path:
