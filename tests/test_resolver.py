@@ -54,9 +54,11 @@ class ResolverTest(unittest.TestCase):
             root = Path(tmp)
             src = root / "src"
             src.mkdir()
+            source_package = src / "pkg"
+            source_package.mkdir()
             (src / "util.py").write_text(
                 "def target():\n    return 'src'\n", encoding="utf-8")
-            (src / "app.py").write_text(
+            (source_package / "app.py").write_text(
                 "import util\n\n"
                 "def invoke():\n    return util.target()\n",
                 encoding="utf-8",
@@ -67,7 +69,7 @@ class ResolverTest(unittest.TestCase):
             build_index(cfg)
             store = IndexStore(str(cfg.db_path))
             try:
-                fid = store.file_by_path("src/app.py")["id"]
+                fid = store.file_by_path("src/pkg/app.py")["id"]
                 self.assertEqual(
                     resolve_module(store, fid, "util"),
                     store.file_by_path("src/util.py")["id"],
