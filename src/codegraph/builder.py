@@ -16,8 +16,8 @@ from .scanner import deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
-_RESOLVER_VERSION = 9
-_SCANNER_VERSION = 6
+_RESOLVER_VERSION = 10
+_SCANNER_VERSION = 7
 
 
 @dataclass

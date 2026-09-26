@@ -173,10 +173,13 @@ def _imports_python_heuristic(text):
         if m:
             line = start + 1
             for item in m.group(1).split(","):
-                name = RE_PY_IMP_MODULE_NAME.match(item.strip())
+                item = item.strip()
+                name = RE_PY_IMP_MODULE_NAME.match(item)
                 if name:
                     module = re.sub(r"\s+", "", name.group(0))
-                    imports.append(ImportRec(module, [], "module", line))
+                    alias = re.search(r"\s+as\s+(\w+)\s*$", item)
+                    names = [f"{module} as {alias.group(1)}"] if alias else []
+                    imports.append(ImportRec(module, names, "module", line))
     source_lines = text.splitlines()
     idx = 0
     while idx < len(source_lines):
@@ -238,7 +241,12 @@ def _imports_from_ast(tree, line_offset=0):
         line = node.lineno + line_offset
         if isinstance(node, ast.Import):
             imports.extend(
-                ImportRec(alias.name, [], "module", line)
+                ImportRec(
+                    alias.name,
+                    [f"{alias.name} as {alias.asname}"] if alias.asname else [],
+                    "module",
+                    line,
+                )
                 for alias in node.names
             )
         else:
