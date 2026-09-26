@@ -154,6 +154,8 @@ Python stdio server，并向它发送 JSON 请求（默认取 dsh 进程当前�
 同一根目录的请求会串行执行，每次调用都支持超时和取消；若 server 无法启动则回退到一次性 Python CLI。
 尚未建索引时先调用 `codegraph_reindex`——只读工具在此之前会返回可读的错误提示。
 
+若其他 harness 直接启动 `plugin.json` 中的 Python 入口，需先将 CodeGraph 安装为 Python 包，或将 `PYTHONPATH` 指向本插件的 `src` 目录。DSH Node bridge 会自动设置该路径。
+
 ## 配置文件
 
 `codegraph.json`（项目根目录，`codegraph init` 生成；以下为关键字段示例，`exclude` 默认值共 17 项，此处为节选）：

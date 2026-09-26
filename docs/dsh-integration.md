@@ -46,6 +46,8 @@ dsh 是「一切皆是插件」的 agent harness：插件以 npm bundle 分发�
 - `tools`：8 个工具的完整名称、描述与 JSON Schema（与 `tools/list` 返回一致）
 - `configSchema`：配置字段说明
 
+直接执行 manifest 中的 Python 命令（`entry.tool_server` 或 `entry.cli`）时，运行环境必须能导入 `codegraph`：从源码仓库执行 `pip install .`，或将 `PYTHONPATH` 设置为插件目录下的 `src`。DSH 的 npm Node bridge 会自动设置此路径；通用 manifest host 需要自行安装 Python 包或设置环境变量。
+
 任何「读 manifest 启动工具进程」的 harness 都可以这样接入：按 `entry.tool_server` 拉起进程，走标准 MCP 握手（`initialize` → `notifications/initialized` → `tools/list` → `tools/call`），协议版本支持 `2024-11-05` 与 `2025-03-26`。本插件的协议层只依赖标准库，不依赖任何 MCP SDK。
 
 ## 工具一览
