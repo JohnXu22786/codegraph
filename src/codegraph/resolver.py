@@ -269,6 +269,8 @@ def _imported_files(store: IndexStore, file_id: int):
                         for package_file_id, _ in
                         _java_package_files(store, package)
                     )
+        if file["lang"] == "python" and imp["kind"] == "module":
+            continue
         for nm in _names_of(imp):
             if file["lang"] == "python":
                 alias = _split_import_alias(nm)
@@ -376,12 +378,32 @@ def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
 
 
 def _python_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
-    """Resolve calls through aliased Python ``from`` imports."""
+    """Resolve calls through aliased Python module and member imports."""
     file = store.file_by_id(file_id)
     if file is None or file["lang"] != "python":
         return None
     for imp in store.imports_for_file(file_id):
-        if imp["kind"] != "from" or not imp["target_id"]:
+        if not imp["target_id"]:
+            continue
+        if imp["kind"] == "module":
+            for binding in _names_of(imp):
+                alias = _split_import_alias(binding)
+                if alias is None:
+                    continue
+                _, local_name = alias
+                if not callee_text.startswith(local_name + "."):
+                    continue
+                member_path = callee_text[len(local_name) + 1:]
+                source_name, _, member_path = member_path.partition(".")
+                if not source_name:
+                    continue
+                target = _aliased_symbol_target(
+                    store, imp["target_id"], source_name, member_path
+                )
+                if target is not None:
+                    return target
+            continue
+        if imp["kind"] != "from":
             continue
         for binding in _names_of(imp):
             alias = _split_import_alias(binding)

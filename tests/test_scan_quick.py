@@ -60,6 +60,22 @@ class QuickPythonTest(unittest.TestCase):
             [("os", "module", 2), ("sys", "module", 2)],
         )
 
+    def test_module_import_aliases_are_recorded(self):
+        sources = (
+            "import pkg.pricing as p\nimport other.pricing as q\n",
+            "import pkg.pricing as p; import other.pricing as q\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                scan = quick.quick_scan(source, "python")
+                self.assertEqual(
+                    [(item.module, item.names, item.kind) for item in scan.imports],
+                    [
+                        ("pkg.pricing", ["pkg.pricing as p"], "module"),
+                        ("other.pricing", ["other.pricing as q"], "module"),
+                    ],
+                )
+
     def test_semicolon_separated_imports(self):
         source = (
             "import os; import sys\n"
