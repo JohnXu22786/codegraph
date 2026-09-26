@@ -29,6 +29,7 @@ class SymbolRec:
     end: int  # 1-based line where the declaration's body ends
     signature: str
     doc: str = ""
+    default_export: bool = False
 
 
 @dataclass

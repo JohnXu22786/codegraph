@@ -405,10 +405,17 @@ def _javascript_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
             source_name, local_name = binding.split(" as ", 1)
             if callee_text != local_name.strip():
                 continue
-            rows = store.conn.execute(
-                "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
-                (imp["target_id"], source_name.strip()),
-            ).fetchall()
+            if source_name.strip() == "default":
+                rows = store.conn.execute(
+                    "SELECT id FROM symbols WHERE file_id = ? "
+                    "AND default_export = 1 ORDER BY id",
+                    (imp["target_id"],),
+                ).fetchall()
+            else:
+                rows = store.conn.execute(
+                    "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
+                    (imp["target_id"], source_name.strip()),
+                ).fetchall()
             if len(rows) == 1:
                 return rows[0]["id"]
     return None
