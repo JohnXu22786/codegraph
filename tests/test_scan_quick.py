@@ -367,6 +367,15 @@ class QuickJavascriptTest(unittest.TestCase):
 
         self.assertEqual(scan.imports[0].names, ["foo as bar"])
 
+    def test_commonjs_property_binding_preserves_source_alias(self):
+        scan = quick.quick_scan(
+            "const bar = require('./util.js').foo;\n",
+            "javascript",
+            "app.js",
+        )
+
+        self.assertEqual(scan.imports[0].names, ["foo as bar"])
+
     def test_typescript_declaration_function_is_indexed(self):
         scan = quick.quick_scan(
             "export declare function make(): void;\n",
