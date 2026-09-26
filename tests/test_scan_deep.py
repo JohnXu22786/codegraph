@@ -100,6 +100,26 @@ class DeepPythonTest(unittest.TestCase):
 
 @unittest.skipUnless(deep.supports("javascript"), "tree-sitter JavaScript grammar not installed")
 class DeepJavascriptTest(unittest.TestCase):
+    def test_same_line_functions_and_methods_keep_call_owners(self):
+        src = (
+            "function first() { x(); } function second() { y(); }\n"
+            "class App { a() { z(); } b() { w(); } }\n"
+        )
+
+        scan = deep.deep_scan(src, "javascript", "app.js")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("app.first", "x"),
+                ("app.second", "y"),
+                ("app.App.a", "z"),
+                ("app.App.b", "w"),
+            },
+        )
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["app.first"].end, 1)
+
     def test_dynamic_import_is_recorded_as_an_import(self):
         src = 'async function load() { return import("./lazy.js"); }'
 
@@ -162,6 +182,18 @@ class DeepJavascriptTest(unittest.TestCase):
     deep.supports("typescript"), "tree-sitter TypeScript grammar not installed"
 )
 class DeepTypescriptTest(unittest.TestCase):
+    def test_same_line_functions_keep_call_owners(self):
+        src = "function first() { x(); } function second() { y(); }"
+
+        scan = deep.deep_scan(src, "typescript", "app.ts")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("app.first", "x"), ("app.second", "y")},
+        )
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["app.first"].end, 1)
+
     def test_dynamic_import_is_recorded_as_an_import(self):
         src = 'async function load() { return import("./lazy.js"); }'
 
@@ -507,6 +539,21 @@ class DeepRustTest(unittest.TestCase):
         self.assertEqual(
             by_q["geometry.Square.perimeter"].parent, "geometry.Square"
         )
+
+
+@unittest.skipUnless(deep.supports("java"), "tree-sitter Java grammar not installed")
+class DeepJavaTest(unittest.TestCase):
+    def test_same_line_methods_keep_call_owners(self):
+        src = "class App { void a() { x(); } void b() { y(); } }"
+
+        scan = deep.deep_scan(src, "java", "App.java")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("App.App.a", "x"), ("App.App.b", "y")},
+        )
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertGreaterEqual(by_q["App.App.a"].end, by_q["App.App.a"].start)
 
 
 if __name__ == "__main__":

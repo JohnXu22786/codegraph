@@ -163,6 +163,15 @@ _CONTAINERS = {
     "rust": {"impl_item", "trait_item", "function_item"},
 }
 
+_CALLER_SCOPES = {
+    "python": set(),
+    "javascript": {"function_declaration", "method_definition"},
+    "typescript": {"function_declaration", "method_definition"},
+    "go": set(),
+    "java": {"method_declaration", "constructor_declaration"},
+    "rust": {"function_item"},
+}
+
 _EXCLUDE = {
     "python": PY_EXCLUDE,
     "javascript": JS_EXCLUDE,
@@ -214,6 +223,7 @@ class _Walker:
         self.go_generic_functions = set()
         self.go_name_scopes = [set()]
         self.stack = []  # (kind, qualname) of open containers
+        self.call_stack = []  # qualified names of active callable declarations
         self.items = []  # (start, depth, SymbolRec)
         self.raw_calls = []  # (callee, line, caller)
         self.imports = []
@@ -310,6 +320,7 @@ class _Walker:
         t = node.type
         decl_kind = _DECL[self.lang].get(t)
         pushed = False
+        caller_pushed = False
         go_scope = self.lang == "go" and t in _GO_SCOPE_NODES
         if go_scope:
             self.go_name_scopes.append(set())
@@ -329,6 +340,9 @@ class _Walker:
             kind, name, doc = self._declare(node, t, decl_kind)
             if name:
                 self._emit(kind, name, doc, node)
+                if t in _CALLER_SCOPES[self.lang] and kind in ("function", "method"):
+                    self.call_stack.append(self.items[-1][2].qualname)
+                    caller_pushed = True
                 if t in _CONTAINERS[self.lang]:
                     self.stack.append((kind, self.items[-1][2].qualname))
                     pushed = True
@@ -358,6 +372,8 @@ class _Walker:
                 self.go_name_scopes[-1].update(names)
         if pushed:
             self.stack.pop()
+        if caller_pushed:
+            self.call_stack.pop()
 
     def _declare(self, node, node_type, kind):
         """Return (kind, name, doc) for a declaration node."""
@@ -484,14 +500,7 @@ class _Walker:
             return
         if head in _EXCLUDE[self.lang]:
             return
-        caller = ""
-        if self.lang == "rust":
-            for kind, qual in reversed(self.stack):
-                if kind == "module":
-                    break
-                if kind in ("function", "method"):
-                    caller = qual
-                    break
+        caller = self.call_stack[-1] if self.call_stack else ""
         self.raw_calls.append((callee, node.start_point[0] + 1, caller))
 
 
@@ -524,7 +533,7 @@ def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
         walker.walk(child)
 
     recs = _finalize(walker.items, len(lines))
-    if lang == "rust":
+    if lang in ("rust", "javascript", "typescript", "java"):
         for rec in recs:
             rec.end = max(rec.start, rec.end)
     if lang == "python":
