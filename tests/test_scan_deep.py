@@ -98,10 +98,35 @@ class DeepPythonTest(unittest.TestCase):
         self.assertEqual(deep_sig, quick_sig)
 
 
+@unittest.skipUnless(deep.supports("javascript"), "tree-sitter JavaScript grammar not installed")
+class DeepJavascriptTest(unittest.TestCase):
+    def test_dynamic_import_is_recorded_as_an_import(self):
+        src = 'async function load() { return import("./lazy.js"); }'
+
+        scan = deep.deep_scan(src, "javascript", "app.js")
+
+        self.assertEqual(
+            [(imp.module, imp.kind, imp.line) for imp in scan.imports],
+            [("./lazy.js", "import", 1)],
+        )
+        self.assertEqual(scan.calls, [])
+
+
 @unittest.skipUnless(
     deep.supports("typescript"), "tree-sitter TypeScript grammar not installed"
 )
 class DeepTypescriptTest(unittest.TestCase):
+    def test_dynamic_import_is_recorded_as_an_import(self):
+        src = 'async function load() { return import("./lazy.js"); }'
+
+        scan = deep.deep_scan(src, "typescript", "app.ts")
+
+        self.assertEqual(
+            [(imp.module, imp.kind, imp.line) for imp in scan.imports],
+            [("./lazy.js", "import", 1)],
+        )
+        self.assertEqual(scan.calls, [])
+
     def test_generic_calls_are_recorded(self):
         src = "function caller() { foo<T>(); obj.foo<T>(); ns.foo<T>(); }"
 
