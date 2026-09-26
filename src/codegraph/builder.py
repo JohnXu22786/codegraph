@@ -16,7 +16,8 @@ from .scanner import deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
-_RESOLVER_VERSION = 6
+_RESOLVER_VERSION = 7
+_SCANNER_VERSION = 1
 
 
 @dataclass
@@ -110,6 +111,8 @@ def _scan_config(cfg: ProjectConfig, include_cargo=True,
     return json.dumps(
         {"engine": cfg.engine, "language_map": cfg.language_map,
          "providers": providers,
+         # Scanner changes must rebuild payloads from unchanged source files.
+         "scanner_version": _SCANNER_VERSION,
          # A resolver change must revisit unchanged payloads in existing DBs.
          "resolver_version": _RESOLVER_VERSION,
         # Cargo roots affect resolution even though they do not affect the
@@ -201,7 +204,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         previous_scan_config = {}
     scan_settings_changed = (
         previous_scan_config.get("engine") != current_scan_config["engine"] or
-        previous_scan_config.get("language_map") != current_scan_config["language_map"]
+        previous_scan_config.get("language_map") != current_scan_config["language_map"] or
+        previous_scan_config.get("scanner_version") !=
+        current_scan_config["scanner_version"]
     )
     cargo_metadata_changed = (
         previous_scan_config.get("cargo_manifests") !=
