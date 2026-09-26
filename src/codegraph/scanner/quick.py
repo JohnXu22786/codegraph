@@ -428,12 +428,379 @@ def _strip_js_comment(line: str) -> str:
     return re.split(r"//", line, maxsplit=1)[0] if "//" in line else line
 
 
-def _imports_javascript(text):
+def _skip_js_trivia(text, index):
+    while index < len(text):
+        if text[index].isspace():
+            index += 1
+        elif text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            if newline < 0:
+                return len(text)
+            index = newline + 1
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            if end < 0:
+                return len(text)
+            index = end + 2
+        else:
+            break
+    return index
+
+
+def _skip_js_quoted(text, index):
+    quote = text[index]
+    index += 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == quote:
+            return index + 1
+        else:
+            index += 1
+    return len(text)
+
+
+def _read_js_import_specifier(text, index):
+    index = _skip_js_trivia(text, index)
+    if index >= len(text) or text[index] not in "'\"`":
+        return None
+    quote = text[index]
+    start = index + 1
+    index = start
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif quote == "`" and text.startswith("${", index):
+            return None
+        elif text[index] == quote:
+            specifier = text[start:index]
+            if not specifier:
+                return None
+            boundary = _skip_js_trivia(text, index + 1)
+            return specifier if boundary < len(text) and text[boundary] in ",)" else None
+        else:
+            index += 1
+    return None
+
+
+def _skip_js_regex(text, index):
+    index += 1
+    in_class = False
+    while index < len(text) and text[index] not in "\r\n":
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == "[":
+            in_class = True
+            index += 1
+        elif text[index] == "]" and in_class:
+            in_class = False
+            index += 1
+        elif text[index] == "/" and not in_class:
+            index += 1
+            while index < len(text) and text[index].isalpha():
+                index += 1
+            return index
+        else:
+            index += 1
+    return index
+
+
+def _is_jsx_tag_start(text, index):
+    if index + 1 >= len(text):
+        return False
+    char = text[index + 1]
+    if char in "/>":
+        return True
+    return char in "_$" or char.isidentifier()
+
+
+def _scan_jsx_tag(text, index, imports, jsx):
+    closing = text.startswith("</", index)
+    index += 2 if closing else 1
+    if index < len(text) and text[index] == ">":
+        return index + 1, False, closing
+    while index < len(text):
+        char = text[index]
+        if char in "'\"`":
+            index = _skip_js_quoted(text, index)
+        elif char == "{":
+            index = _scan_js_dynamic_imports_code(
+                text, index + 1, imports, template_expression=True, jsx=jsx
+            )
+        elif text.startswith("/>", index):
+            return index + 2, True, closing
+        elif char == ">":
+            return index + 1, False, closing
+        else:
+            index += 1
+    return len(text), True, closing
+
+
+def _skip_jsx_element(text, index, imports, jsx):
+    index, self_closing, closing = _scan_jsx_tag(text, index, imports, jsx)
+    if self_closing or closing:
+        return index
+    while index < len(text):
+        if text.startswith("</", index):
+            index, _, _ = _scan_jsx_tag(text, index, imports, jsx)
+            return index
+        if text[index] == "{":
+            index = _scan_js_dynamic_imports_code(
+                text, index + 1, imports, template_expression=True, jsx=jsx
+            )
+        elif text[index] == "<" and _is_jsx_tag_start(text, index):
+            index = _skip_jsx_element(text, index, imports, jsx)
+        else:
+            index += 1
+    return index
+
+
+def _find_js_closing_paren(text, index):
+    depth = 0
+    while index < len(text):
+        char = text[index]
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            index = len(text) if end < 0 else end + 2
+        elif char in "'\"`":
+            index = _skip_js_quoted(text, index)
+        elif char == "(":
+            depth += 1
+            index += 1
+        elif char == ")":
+            depth -= 1
+            if not depth:
+                return index
+            index += 1
+        else:
+            index += 1
+    return None
+
+
+def _looks_like_ts_generic_arrow(text, index):
+    cursor = index + 1
+    angle_depth = brace_depth = paren_depth = bracket_depth = 0
+    has_parameter_comma = False
+    while cursor < len(text):
+        cursor = _skip_js_trivia(text, cursor)
+        if cursor >= len(text):
+            return False
+        char = text[cursor]
+        if char in "'\"`":
+            cursor = _skip_js_quoted(text, cursor)
+        elif char == "{":
+            brace_depth += 1
+            cursor += 1
+        elif char == "}" and brace_depth:
+            brace_depth -= 1
+            cursor += 1
+        elif char == "(":
+            paren_depth += 1
+            cursor += 1
+        elif char == ")" and paren_depth:
+            paren_depth -= 1
+            cursor += 1
+        elif char == "[":
+            bracket_depth += 1
+            cursor += 1
+        elif char == "]" and bracket_depth:
+            bracket_depth -= 1
+            cursor += 1
+        elif char == "<":
+            angle_depth += 1
+            cursor += 1
+        elif char == ">" and cursor and text[cursor - 1] == "=":
+            cursor += 1
+        elif char == ">" and angle_depth:
+            angle_depth -= 1
+            cursor += 1
+        elif char == ">":
+            header = text[index + 1:cursor]
+            if not has_parameter_comma and not re.search(r"\bextends\b", header):
+                return False
+            params = _skip_js_trivia(text, cursor + 1)
+            if params >= len(text) or text[params] != "(":
+                return False
+            end = _find_js_closing_paren(text, params)
+            if end is None:
+                return False
+            arrow = _skip_js_trivia(text, end + 1)
+            return text.startswith("=>", arrow)
+        elif char == "," and not (brace_depth or paren_depth or bracket_depth or angle_depth):
+            has_parameter_comma = True
+            cursor += 1
+        else:
+            cursor += 1
+    return False
+
+
+def _scan_js_dynamic_imports_code(
+    text, index, imports, template_expression=False, jsx=False
+):
+    regex_prefixes = {
+        "", "(", "[", "{", "=", ":", ",", ";", "!", "?", "new", "extends",
+        "return",
+        "throw", "case", "delete", "void", "typeof", "instanceof", "in",
+        "of", "yield", "await", "else", "do", "control)", "block}",
+        "+", "-", "*", "/", "%", "&", "|", "^", "~", "<", ">",
+        "=>", "&&", "||", "??",
+    }
+    control_parens = {"if", "while", "for", "with", "switch", "catch"}
+    jsx_prefixes = regex_prefixes | {"default", "new"}
+    paren_stack = []
+    brace_stack = []
+    class_pending = False
+    class_header_parens = 0
+    brace_depth = 0
+    previous = ""
+    while index < len(text):
+        char = text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if text.startswith("//", index):
+            newline = text.find("\n", index + 2)
+            index = len(text) if newline < 0 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            index = len(text) if end < 0 else end + 2
+            continue
+        if template_expression and char == "}":
+            if not brace_depth:
+                return index + 1
+            brace_depth -= 1
+        if char in "'\"":
+            index = _skip_js_quoted(text, index)
+            previous = "literal"
+            continue
+        if char == "`":
+            index = _skip_js_template(text, index, imports, jsx)
+            previous = "literal"
+            continue
+        if char == "/" and previous in regex_prefixes:
+            index = _skip_js_regex(text, index)
+            previous = "literal"
+            continue
+        if (
+            jsx and char == "<" and previous in jsx_prefixes
+            and not _looks_like_ts_generic_arrow(text, index)
+            and _is_jsx_tag_start(text, index)
+        ):
+            index = _skip_jsx_element(text, index, imports, jsx)
+            previous = "literal"
+            continue
+        if char in "_$" or char.isalpha():
+            end = index + 1
+            while end < len(text):
+                next_char = text[end]
+                if next_char in "_$" or next_char.isalnum() or (
+                    ("a" + next_char).isidentifier()
+                ):
+                    end += 1
+                else:
+                    break
+            word = text[index:end]
+            if word == "import" and previous != ".":
+                opening = _skip_js_trivia(text, end)
+                if opening < len(text) and text[opening] == "(":
+                    specifier = _read_js_import_specifier(text, opening + 1)
+                    if specifier is not None:
+                        imports.append(ImportRec(
+                            specifier, [], "import", _line_no(text, index)
+                        ))
+            if word == "class":
+                following = _skip_js_trivia(text, end)
+                class_pending = previous != "." and (
+                    following >= len(text) or text[following] not in ":("
+                )
+            previous = word
+            index = end
+            continue
+        if text.startswith("?.", index):
+            previous = "."
+            index += 2
+            continue
+        if text.startswith(("++", "--"), index):
+            previous = text[index:index + 2]
+            index += 2
+            continue
+        if text.startswith(("=>", "&&", "||", "??"), index):
+            previous = text[index:index + 2]
+            index += 2
+            continue
+        if char == "(":
+            paren_stack.append(previous in control_parens)
+            if class_pending:
+                class_header_parens += 1
+            previous = char
+            index += 1
+            continue
+        if char == ")":
+            control = paren_stack.pop() if paren_stack else False
+            if class_pending and class_header_parens:
+                class_header_parens -= 1
+            previous = "control)" if control else char
+            index += 1
+            continue
+        if char == "{":
+            if template_expression:
+                brace_depth += 1
+            class_body = class_pending and not class_header_parens
+            is_block = class_body or previous in {
+                "", ";", ")", "control)", "else", "do", "try", "finally",
+                "=>", "block}",
+            }
+            brace_stack.append(is_block)
+            if class_body:
+                class_pending = False
+            previous = char
+            index += 1
+            continue
+        if char == "}":
+            is_block = brace_stack.pop() if brace_stack else False
+            previous = "block}" if is_block else char
+            index += 1
+            continue
+        if char == ";":
+            class_pending = False
+        previous = char
+        index += 1
+    return index
+
+
+def _skip_js_template(text, index, imports, jsx):
+    index += 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == "`":
+            return index + 1
+        elif text.startswith("${", index):
+            index = _scan_js_dynamic_imports_code(
+                text, index + 2, imports, template_expression=True, jsx=jsx
+            )
+        else:
+            index += 1
+    return len(text)
+
+
+def _imports_javascript_dynamic(text, jsx=False):
+    imports = []
+    _scan_js_dynamic_imports_code(text, 0, imports, jsx=jsx)
+    return imports
+
+
+def _imports_javascript(text, jsx=False):
     imports = []
     for m in RE_JS_ESM.finditer(text):
         clause = m.group(1) or ""
         names = [x for x in RE_JS_IDENT.findall(clause) if x != "as"]
         imports.append(ImportRec(m.group(2), names, "import", _line_no(text, m.start())))
+    imports.extend(_imports_javascript_dynamic(text, jsx=jsx))
     # pair each require(...) with the *nearest preceding* binding statement;
     # searching from 0 would mis-bind names in files with several requires
     stmts = list(RE_JS_REQ_NAMES.finditer(text))
@@ -523,7 +890,8 @@ def _scan_javascript(text, lang, rel_path=None):
         for callee in _calls_in_line(line, JS_EXCLUDE):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
-    return FileScan(lang, module, recs, calls, _imports_javascript(text))
+    jsx = str(rel_path).lower().endswith((".jsx", ".tsx")) if rel_path else False
+    return FileScan(lang, module, recs, calls, _imports_javascript(text, jsx=jsx))
 
 
 # --------------------------------------------------------------------------

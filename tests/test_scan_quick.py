@@ -272,6 +272,71 @@ class QuickJavascriptTest(unittest.TestCase):
             [("./foo", ["useFoo"], "import", 1)],
         )
 
+    def test_dynamic_import_is_a_module_dependency(self):
+        src = (
+            "async function load() {\n"
+            "  return await import /* split */ (\n"
+            "    /* webpackChunkName: 'dynamic' */\n"
+            "    './dynamic.js',\n"
+            "    { with: { type: 'json' } }\n"
+            "  );\n"
+            "}\n"
+            "// import('./line-comment.js')\n"
+            "/* import('./block-comment.js') */\n"
+            "const example = \"import('./string.js')\";\n"
+            "const computed = import('./' + name);\n"
+            "loader . import('./method.js');\n"
+            "const matcher = /import\\('\\.\\/regex\\.js'\\)/;\n"
+            "const unaryRegex = +/import('unary-ghost.js')/;\n"
+            "const divisionRegex = value / /import('division-ghost.js')/.test(source);\n"
+            "const constructor = new /import('new-ghost.js')/.constructor();\n"
+            "if (ready) /import\\('\\.\\/control-regex\\.js'\\)/.test(source);\n"
+            "if (ready) {} /import\\('\\.\\/block-regex\\.js'\\)/.test(source);\n"
+            "class Box {} /import\\('\\.\\/class-regex\\.js'\\)/.test(source);\n"
+            "class Invalid extends /import('extends-ghost.js')/ {}\n"
+            "const legacy = { class: 1 }\n"
+            "const quotient = {} / import('./division.js');\n"
+            "const nested = `${await import('./template.js')}`;\n"
+        )
+        scan = quick.quick_scan(src, "javascript")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [
+                ("./dynamic.js", [], "import", 2),
+                ("./division.js", [], "import", 22),
+                ("./template.js", [], "import", 23),
+            ],
+        )
+
+    def test_dynamic_import_skips_jsx_text_but_scans_expressions(self):
+        src = (
+            "const element = component + <p>Run import('ghost.js') for details</p>;\n"
+            "async function load() { return await <p>import('await-ghost.js')</p>; }\n"
+            "function* generate() { yield <p>import('yield-ghost.js')</p>; }\n"
+            "function fail() { throw <p>import('throw-ghost.js')</p>; }\n"
+            "const dynamic = <Widget>{import('./child.js')}</Widget>;\n"
+            "const attr = <Lazy load={() => import('./attribute.js')} />;\n"
+        )
+        scan = quick.quick_scan(src, "javascript", "view.jsx")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [
+                ("./child.js", [], "import", 5),
+                ("./attribute.js", [], "import", 6),
+            ],
+        )
+
+    def test_dynamic_import_scans_tsx_generic_arrow_and_skips_text(self):
+        src = (
+            "const generic = <T,>(value: T) => import('./generic.js');\n"
+            "const element = <p>import('./tsx-ghost.js')</p>;\n"
+        )
+        scan = quick.quick_scan(src, "typescript", "view.tsx")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [("./generic.js", [], "import", 1)],
+        )
+
     def test_esm_util(self):
         scan = _scan("web/util.ts")
         self.assertEqual(scan.symbols[0].qualname, "web/util.fmt")
