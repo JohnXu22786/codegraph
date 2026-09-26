@@ -175,7 +175,7 @@ class DeepTypescriptTest(unittest.TestCase):
 
         scan = deep.deep_scan(src, "typescript", "util/index.d.ts")
 
-        self.assertEqual(scan.symbols[0].qualname, "util/index.d.make")
+        self.assertEqual(scan.symbols[0].qualname, "util/index.make")
         self.assertEqual(scan.symbols[0].kind, "function")
 
     def test_generic_calls_are_recorded(self):

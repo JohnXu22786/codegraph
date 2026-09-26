@@ -179,4 +179,8 @@ def module_of(rel_path, lang, text="") -> str:
     if lang == "java":
         package = _declared_package(lang, text)
         return package or rel.with_suffix("").as_posix()
+    if lang == "typescript":
+        for suffix in (".d.ts", ".d.mts", ".d.cts"):
+            if rel.name.endswith(suffix):
+                return rel.as_posix()[:-len(suffix)]
     return rel.with_suffix("").as_posix()
