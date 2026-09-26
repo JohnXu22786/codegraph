@@ -129,9 +129,9 @@ _DECL = {
         "method_declaration": "method",
         "constructor_declaration": "method",
     },
-    "rust": {"function_item": "function", "struct_item": "type",
-             "enum_item": "type", "trait_item": "interface",
-             "impl_item": "impl"},
+    "rust": {"function_item": "function", "function_signature_item": "function",
+             "struct_item": "type", "enum_item": "type",
+             "trait_item": "interface", "impl_item": "impl"},
 }
 
 _CALLS = {
@@ -366,9 +366,10 @@ class _Walker:
                 target = node.child_by_field_name("type")
                 if target is not None:
                     name = _rust_impl_owner(_node_text(target, self.source))
-            if node_type == "function_item":
-                kind = "method" if self.stack and self.stack[-1][0] in ("impl", "trait") \
-                    else "function"
+            if node_type in ("function_item", "function_signature_item"):
+                kind = "method" if self.stack and self.stack[-1][0] in (
+                    "impl", "interface"
+                ) else "function"
             return kind, name, ""
         if lang == "go":
             if node_type == "method_declaration":
