@@ -30,6 +30,7 @@ class IndexReport:
     imports: int = 0
     languages: dict = field(default_factory=dict)
     elapsed: float = 0.0
+    complete: bool = True
 
 
 def _digest(data: bytes) -> str:
@@ -348,8 +349,10 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
 
     report.files_scanned = len(discovered)
     report.elapsed = time.monotonic() - started
-    emit(f"indexed {report.files_scanned} files ({report.files_changed} changed, "
-         f"{report.files_skipped} skipped, {report.files_removed} removed) "
-         f"in {report.elapsed:.2f}s — {report.symbols} symbols, "
-         f"{report.calls} calls, {report.imports} imports")
+    report.complete = scan_config_complete
+    if not (force and not report.complete):
+        emit(f"indexed {report.files_scanned} files ({report.files_changed} changed, "
+             f"{report.files_skipped} skipped, {report.files_removed} removed) "
+             f"in {report.elapsed:.2f}s — {report.symbols} symbols, "
+             f"{report.calls} calls, {report.imports} imports")
     return report

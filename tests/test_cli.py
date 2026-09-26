@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -124,8 +125,27 @@ class CliSmokeTest(unittest.TestCase):
         proc = _run(["index", "--root", str(self.root), "--json"], cwd=self.tmp.name)
         self.assertEqual(proc.returncode, 0)
         report = json.loads(proc.stdout.decode("utf-8"))
+        self.assertTrue(report["complete"])
         self.assertEqual(report["files_scanned"], 14)
         self.assertEqual(report["files_changed"], 14)
+
+    def test_incomplete_forced_index_exits_with_failure(self):
+        from codegraph.cli import main
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch(
+            "codegraph.builder.build_index",
+            return_value=mock.Mock(complete=False),
+        ):
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                result = main([
+                    "index", "--root", str(self.root), "--force", "--json"
+                ])
+
+        self.assertEqual(result, 1)
+        self.assertIn("forced index rebuild incomplete", stderr.getvalue())
+        self.assertEqual(stdout.getvalue(), "")
 
     def test_export_dot(self):
         _run(["index", "--root", str(self.root)], cwd=self.tmp.name)

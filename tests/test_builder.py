@@ -35,6 +35,7 @@ class BuilderTest(unittest.TestCase):
 
     def test_first_index_counts(self):
         report = build_index(self._cfg())
+        self.assertTrue(report.complete)
         self.assertEqual(report.files_scanned, ALL_FILES)
         self.assertEqual(report.files_changed, ALL_FILES)
         self.assertEqual(report.files_skipped, 0)
@@ -552,6 +553,7 @@ class BuilderTest(unittest.TestCase):
             encoding="utf-8",
         )
         report = build_index(cfg, force=True)
+        self.assertTrue(report.complete)
         self.assertEqual(report.files_changed, ALL_FILES)
         self.assertEqual(report.files_skipped, 0)
         store = IndexStore(str(cfg.db_path))
@@ -596,6 +598,7 @@ class BuilderTest(unittest.TestCase):
             with patch("codegraph.scanner.walk.os.walk", incomplete_walk):
                 report = build_index(cfg, force=True, quiet=True)
 
+            self.assertFalse(report.complete)
             self.assertEqual(report.files_removed, 0)
             store = IndexStore(str(cfg.db_path))
             try:
@@ -624,9 +627,10 @@ class BuilderTest(unittest.TestCase):
                 return original_read_bytes(path)
 
             with patch.object(Path, "read_bytes", fail_target_once):
-                build_index(cfg, force=True, quiet=True)
+                report = build_index(cfg, force=True, quiet=True)
 
             self.assertTrue(failed)
+            self.assertFalse(report.complete)
             store = IndexStore(str(cfg.db_path))
             try:
                 self.assertIsNotNone(store.file_by_path("keep.py"))
