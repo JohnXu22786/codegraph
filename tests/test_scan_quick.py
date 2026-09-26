@@ -590,6 +590,27 @@ class QuickGoJavaRustTest(unittest.TestCase):
             },
         )
 
+    def test_rust_inline_module_scans_multiple_trailing_functions(self):
+        scan = quick.quick_scan(
+            "mod util { pub fn run() {} } "
+            "fn first() { first_dep(); } "
+            "fn second() { second_dep(); }\n",
+            "rust",
+            "lib.rs",
+        )
+
+        self.assertEqual(
+            {symbol.qualname for symbol in scan.symbols},
+            {"lib.util.run", "lib.first", "lib.second"},
+        )
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("lib.first", "first_dep"),
+                ("lib.second", "second_dep"),
+            },
+        )
+
     def test_rust_explicit_module_paths_are_calls(self):
         src = (
             "mod util { pub fn helper() {} }\n"
