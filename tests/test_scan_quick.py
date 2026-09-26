@@ -367,6 +367,16 @@ class QuickJavascriptTest(unittest.TestCase):
 
         self.assertEqual(scan.imports[0].names, ["foo as bar"])
 
+    def test_typescript_declaration_function_is_indexed(self):
+        scan = quick.quick_scan(
+            "export declare function make(): void;\n",
+            "typescript",
+            "util/index.d.ts",
+        )
+
+        self.assertEqual(scan.symbols[0].qualname, "util/index.d.make")
+        self.assertEqual(scan.symbols[0].kind, "function")
+
     def test_arrow_function_and_interface(self):
         src = (
             "import { b } from './x';\n"
