@@ -122,7 +122,9 @@ RE_PY_IMP_MODULE_NAME = re.compile(PY_DOTTED_MODULE)
 RE_PY_IMP_MODULE = re.compile(
     rf"^[ \t]*import\s+({PY_DOTTED_MODULE}(?:\s+as\s+\w+)?"
     rf"(?:\s*,\s*{PY_DOTTED_MODULE}(?:\s+as\s+\w+)?)*)")
-RE_PY_IMP_FROM = re.compile(r"^[ \t]*from\s+([\w.]+)\s+import\s+(.+)$", re.M)
+RE_PY_IMP_FROM_START = re.compile(
+    r"^[ \t]*from[ \t]+([\w.]+)[ \t]+import\b"
+)
 
 
 def _python_doc(lines, header_idx):
@@ -172,9 +174,53 @@ def _imports_python(text):
                 if name:
                     module = re.sub(r"\s+", "", name.group(0))
                     imports.append(ImportRec(module, [], "module", line))
-    for m in RE_PY_IMP_FROM.finditer(text):
-        names = [x.strip() for x in m.group(2).strip("()").split(",") if x.strip()]
-        imports.append(ImportRec(m.group(1), names, "from", _line_no(text, m.start())))
+    source_lines = text.splitlines()
+    idx = 0
+    while idx < len(source_lines):
+        m = RE_PY_IMP_FROM_START.match(source_lines[idx])
+        if not m:
+            idx += 1
+            continue
+        start = idx
+        first = source_lines[idx][m.end():].split("#", 1)[0].rstrip()
+        parenthesized = first.lstrip().startswith("(")
+        depth = 0
+        parts = []
+        while idx < len(source_lines):
+            raw = source_lines[idx][m.end():] if idx == start else source_lines[idx]
+            code = raw.split("#", 1)[0].rstrip()
+            if parenthesized:
+                if code.endswith("\\"):
+                    code = code[:-1]
+                complete = False
+                for pos, char in enumerate(code):
+                    if char == "(":
+                        depth += 1
+                    elif char == ")":
+                        depth -= 1
+                        if depth == 0:
+                            code = code[:pos + 1]
+                            complete = True
+                            break
+                parts.append(code)
+                idx += 1
+                if complete:
+                    break
+            else:
+                continued = code.endswith("\\")
+                parts.append(code[:-1] if continued else code)
+                idx += 1
+                if not continued:
+                    break
+
+        names_text = "\n".join(parts).strip()
+        if parenthesized:
+            if not (names_text.startswith("(") and names_text.endswith(")")):
+                continue
+            names_text = names_text[1:-1]
+        names = [x.strip() for x in names_text.split(",") if x.strip()]
+        if names or parenthesized:
+            imports.append(ImportRec(m.group(1), names, "from", start + 1))
     return imports
 
 
