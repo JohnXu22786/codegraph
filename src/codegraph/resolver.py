@@ -142,15 +142,69 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     return None
 
 
+def _go_package_files(store: IndexStore, package_dir: Path):
+    if package_dir == Path("."):
+        rows = store.conn.execute(
+            "SELECT id, path FROM files WHERE lang = 'go' ORDER BY path"
+        )
+    else:
+        prefix = f"{package_dir.as_posix()}/"
+        rows = store.conn.execute(
+            "SELECT id, path FROM files WHERE lang = 'go' "
+            "AND path >= ? AND path < ? ORDER BY path",
+            (prefix, f"{package_dir.as_posix()}0"),
+        )
+    return [
+        (row["id"], Path(row["path"])) for row in rows
+        if Path(row["path"]).parent == package_dir
+    ]
+
+
+def _go_module_path(root: Path):
+    try:
+        lines = (root / "go.mod").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        words = line.split("//", 1)[0].strip().split()
+        if len(words) >= 2 and words[0] == "module":
+            return words[1].strip('"`')
+    return None
+
+
+def _go_package_dirs(root: Path, module_text: str):
+    candidates = []
+    module_path = _go_module_path(root)
+    if module_path and module_text == module_path:
+        candidates.append(Path("."))
+    elif module_path and module_text.startswith(module_path + "/"):
+        suffix = module_text[len(module_path) + 1:]
+        candidates.append(Path(*suffix.split("/")))
+    candidates.append(Path(*module_text.split("/")))
+    return list(dict.fromkeys(candidates))
+
+
 def _imported_files(store: IndexStore, file_id: int):
     """Ids of every file this file imports, plus submodules imported by name."""
     file = store.file_by_id(file_id)
     if file is None:
         return set()
     out = set()
+    expanded_go_dirs = set()
     for imp in store.imports_for_file(file_id):
         if imp["target_id"]:
             out.add(imp["target_id"])
+            if file["lang"] == "go":
+                target = store.file_by_id(imp["target_id"])
+                if target is not None and target["lang"] == "go":
+                    package_dir = Path(target["path"]).parent
+                    if package_dir not in expanded_go_dirs:
+                        expanded_go_dirs.add(package_dir)
+                        out.update(
+                            package_file_id
+                            for package_file_id, _ in
+                            _go_package_files(store, package_dir)
+                        )
         for nm in _names_of(imp):
             base = imp["module"]
             if file["lang"] == "python" and base.startswith("."):
@@ -1080,19 +1134,24 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
                 if (rel := rel_of(cand)) is not None]
 
     # --- go / java: try the module text as a path under the root ----------
-    # Go import paths use slashes for directories; dots are valid in a path
-    # segment (for example, the domain in ``example.com/acme``).
-    parts = module_text.split("/") if lang == "go" else module_text.split(".")
-    target = Path(*parts)
-    cands = []
     if lang == "go":
-        # Import paths are package stems, so append the extension instead of
-        # replacing a valid dot in the final path segment.
-        cands.extend(target.with_name(target.name + ext)
-                     for ext in _EXT_BY_LANG[lang])
-        cands.append(target / "main.go")
-    else:
-        cands.extend(target.with_suffix(ext) for ext in _EXT_BY_LANG[lang])
+        cands = []
+        for target in _go_package_dirs(root, module_text):
+            if target.name:
+                cands.extend(target.with_name(target.name + ext)
+                             for ext in _EXT_BY_LANG[lang])
+            cands.append(target / "main.go")
+            package_dir = rel_of(target)
+            if package_dir is not None:
+                cands.extend(
+                    path for _, path in _go_package_files(store, package_dir)
+                )
+        return [rel for cand in dict.fromkeys(cands)
+                if (rel := rel_of(cand)) is not None]
+
+    parts = module_text.split(".")
+    target = Path(*parts)
+    cands = [target.with_suffix(ext) for ext in _EXT_BY_LANG[lang]]
     return [rel for cand in cands if (rel := rel_of(cand)) is not None]
 
 

@@ -230,6 +230,51 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(gid)
         self.assertEqual(self.store.symbol_by_id(gid).qualname, "helper.Greet")
 
+    def test_go_import_resolves_arbitrarily_named_package_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8",
+            )
+            package_dir = root / "internal" / "math"
+            package_dir.mkdir(parents=True)
+            (root / "main.go").write_text(
+                'package main\n\n'
+                'import "example.com/acme/internal/math"\n\n'
+                'func main() { _ = math.Add(1, 2); _ = math.Area(3) }\n',
+                encoding="utf-8",
+            )
+            (package_dir / "arithmetic.go").write_text(
+                "package math\n\n"
+                "func Add(a, b int) int { return a + b }\n",
+                encoding="utf-8",
+            )
+            (package_dir / "geometry.go").write_text(
+                "package math\n\n"
+                "func Area(side int) int { return side * side }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                imp = store.imports_for_file(main_id)[0]
+                self.assertEqual(
+                    store.file_by_id(imp["target_id"])["path"],
+                    "internal/math/arithmetic.go",
+                )
+                add_id = resolve_callee(store, main_id, "math.Add")
+                area_id = resolve_callee(store, main_id, "math.Area")
+                self.assertIsNotNone(add_id)
+                self.assertIsNotNone(area_id)
+                self.assertEqual(store.symbol_by_id(add_id).qualname, "math.Add")
+                self.assertEqual(store.symbol_by_id(area_id).qualname, "math.Area")
+            finally:
+                store.close()
+
     def test_go_import_path_with_dotted_domain(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
