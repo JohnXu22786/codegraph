@@ -487,6 +487,11 @@ class DeepRustTest(unittest.TestCase):
         scan = deep.deep_scan(src, "rust", "geometry.rs")
         by_q = {symbol.qualname: symbol for symbol in scan.symbols}
 
+        self.assertEqual(
+            [symbol.kind for symbol in scan.symbols
+             if symbol.qualname == "geometry.Square"],
+            ["type"],
+        )
         self.assertEqual(by_q["geometry.Shape"].kind, "interface")
         self.assertEqual(by_q["geometry.Shape.area"].kind, "method")
         self.assertEqual(
