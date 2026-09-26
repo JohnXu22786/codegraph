@@ -55,7 +55,7 @@ exec python3 "$@"
   return wrapper
 }
 
-function makeFallbackRecoveryWrapper(dir, logPath, failPath, releasePath, donePath) {
+function makeFallbackRecoveryWrapper(dir, logPath, failPath, releasePath, donePath, configLogPath) {
   const wrapper = join(dir, 'python-fallback-wrapper.sh')
   const countPath = join(dir, 'persistent-count')
   writeFileSync(
@@ -66,6 +66,11 @@ count_file=${shellQuote(countPath)}
 fail_file=${shellQuote(failPath)}
 release_file=${shellQuote(releasePath)}
 done_file=${shellQuote(donePath)}
+config_log=${shellQuote(configLogPath)}
+
+if [ -n "\${CODEGRAPH_PLUGIN_CONFIG_JSON:-}" ]; then
+  printf '%s\\n' "$CODEGRAPH_PLUGIN_CONFIG_JSON" >> "$config_log"
+fi
 
 record() {
   printf '%s\\n' "$1" >> "$log"
@@ -239,6 +244,41 @@ test('codegraph_reindex builds an index, then queries work', async () => {
     rmSync(scratch, { recursive: true, force: true })
   }
 })
+
+test('bridge forwards manifest settings to the Python server', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-config-'))
+  const root = join(scratch, 'proj')
+  const dbPath = join(scratch, 'manifest.sqlite')
+  const configLogPath = join(scratch, 'plugin-config.json')
+  const invocationLogPath = join(scratch, 'python-invocations.log')
+  cpSync(PROJ, root, { recursive: true })
+  const settings = {
+    db_path: dbPath,
+    include: [],
+    exclude: ['generated'],
+    max_file_kb: 64,
+    incremental: false,
+    engine: 'quick',
+    language_map: { '.custom': 'python' },
+  }
+  const python = makePythonWrapper(
+    scratch,
+    invocationLogPath,
+    `printf '%s\\n' "$CODEGRAPH_PLUGIN_CONFIG_JSON" > ${shellQuote(configLogPath)}\nexec python3 "$@"`,
+  )
+  try {
+    const tools = await applyOnce({ root, python, ...settings })
+    const reindex = await tools.find((tool) => tool.name === 'codegraph_reindex').execute({})
+
+    assert.equal(reindex.ok, true, reindex.error)
+    assert.deepEqual(JSON.parse(readFileSync(configLogPath, 'utf8')), settings)
+    assert.equal(existsSync(dbPath), true)
+  } finally {
+    await closePlugin()
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
 test('bridge reuses one persistent Python process for a root', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-persistent-'))
   const root = join(scratch, 'proj')
@@ -414,11 +454,23 @@ test('fallback keeps queued and new requests serialized for a root', async () =>
   const failPath = join(scratch, 'fail-persistent')
   const releasePath = join(scratch, 'release-fallback')
   const donePath = join(scratch, 'fallback-done')
+  const configLogPath = join(scratch, 'plugin-config.jsonl')
   cpSync(PROJ, root, { recursive: true })
-  const python = makeFallbackRecoveryWrapper(scratch, logPath, failPath, releasePath, donePath)
+  const python = makeFallbackRecoveryWrapper(
+    scratch, logPath, failPath, releasePath, donePath, configLogPath,
+  )
+  const settings = {
+    db_path: join(scratch, 'fallback.sqlite'),
+    include: [],
+    exclude: ['generated'],
+    max_file_kb: 64,
+    incremental: false,
+    engine: 'quick',
+    language_map: { '.custom': 'python' },
+  }
   const pending = []
   try {
-    const tools = await applyOnce({ root, python })
+    const tools = await applyOnce({ root, python, ...settings })
     const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
 
     const first = byName.codegraph_reindex.execute({})
@@ -452,6 +504,11 @@ test('fallback keeps queued and new requests serialized for a root', async () =>
       'persistent-start-2',
       'persistent-ready-2',
     ])
+    const forwardedConfigs = readFileSync(configLogPath, 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line))
+    assert.ok(forwardedConfigs.length >= 2)
+    for (const config of forwardedConfigs) assert.deepEqual(config, settings)
+    assert.equal(existsSync(settings.db_path), true)
   } finally {
     writeFileSync(failPath, '')
     writeFileSync(releasePath, '')

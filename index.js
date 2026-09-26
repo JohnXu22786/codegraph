@@ -22,6 +22,15 @@ const DEFAULT_TIMEOUT_MS = 120000
 const MAX_STREAM_BYTES = 2 * 1024 * 1024
 const MAX_ROOT_SESSIONS = 8
 const SESSIONS = new Map()
+const PLUGIN_CONFIG_FIELDS = [
+  'db_path',
+  'include',
+  'exclude',
+  'max_file_kb',
+  'incremental',
+  'engine',
+  'language_map',
+]
 
 /** 解析 Python 解释器：配置优先，其次按平台惯例取默认。 */
 function pythonBin(config) {
@@ -42,6 +51,25 @@ function resolveRoot(config, args) {
 function joinPathList(first, rest) {
   const sep = process.platform === 'win32' ? ';' : ':'
   return rest ? `${first}${sep}${rest}` : first
+}
+
+function pythonEnv(config) {
+  const env = {
+    ...process.env,
+    PYTHONPATH: joinPathList(SRC_DIR, process.env.PYTHONPATH),
+  }
+  const settings = {}
+  if (config && typeof config === 'object') {
+    for (const key of PLUGIN_CONFIG_FIELDS) {
+      if (Object.hasOwn(config, key) && config[key] !== undefined) {
+        settings[key] = config[key]
+      }
+    }
+  }
+  if (Object.keys(settings).length > 0) {
+    env.CODEGRAPH_PLUGIN_CONFIG_JSON = JSON.stringify(settings)
+  }
+  return env
 }
 
 class PersistentServerUnavailableError extends Error {
@@ -106,10 +134,7 @@ class PythonServer {
     try {
       child = spawn(pythonBin(this.config), ['-m', 'codegraph', 'serve', '--root', this.root], {
         cwd: PLUGIN_DIR,
-        env: {
-          ...process.env,
-          PYTHONPATH: joinPathList(SRC_DIR, process.env.PYTHONPATH),
-        },
+        env: pythonEnv(this.config),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
@@ -421,10 +446,7 @@ function runCodegraph(config, argv, { signal, timeoutMs } = {}) {
     try {
       child = spawn(pythonBin(config), ['-m', 'codegraph', ...argv], {
         cwd: PLUGIN_DIR,
-        env: {
-          ...process.env,
-          PYTHONPATH: joinPathList(SRC_DIR, process.env.PYTHONPATH),
-        },
+        env: pythonEnv(config),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })

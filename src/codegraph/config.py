@@ -59,7 +59,7 @@ def default_config(root) -> ProjectConfig:
 
 
 def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
-    """Resolve the effective config: flags > environment > file > defaults."""
+    """Resolve config from flags, plugin settings, environment, and file."""
     cwd = Path.cwd()
     env_root = os.environ.get(ENV_PREFIX + "ROOT")
     base_root = Path(root or env_root or cwd).resolve()
@@ -69,6 +69,7 @@ def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
     cfg_file = Path(config_path) if config_path is not None else Path(cfg.root) / CONFIG_NAME
     if config_path is not None and not cfg_file.is_file():
         raise FileNotFoundError(f"configuration file not found: {cfg_file}")
+    data = {}
     if cfg_file.is_file():
         data = json.loads(cfg_file.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
@@ -89,32 +90,78 @@ def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
         for key in ("include", "exclude", "max_file_kb", "incremental", "engine",
                     "language_map"):
             if key in data:
-                if key == "language_map":
-                    if not isinstance(data[key], dict):
-                        raise ValueError(
-                            'config field "language_map" must be an object, got '
-                            f'{data[key]!r}'
-                        )
-                    if any(not isinstance(value, str) for value in data[key].values()):
-                        raise ValueError(
-                            'config field "language_map" must map strings to strings'
-                        )
                 setattr(cfg, key, data[key])
-        if "incremental" in data and not isinstance(cfg.incremental, bool):
-            raise ValueError(
-                'config field "incremental" must be a boolean, got '
-                f'{cfg.incremental!r}'
-            )
         if "db_path" in data:
             cfg.db_path = data["db_path"]
         elif cfg.root != str(base_root):
             cfg.db_path = str(Path(cfg.root) / ".cg" / "cg.sqlite")
 
-    # a string include/exclude (e.g. "src" instead of ["src"]) would be iterated
-    # character-by-character by the walker; fail fast so the user notices
+    # Shell environment overrides beat the file.
+    if os.environ.get(ENV_PREFIX + "DB"):
+        cfg.db_path = os.environ[ENV_PREFIX + "DB"]
+    if os.environ.get(ENV_PREFIX + "MAX_FILE_KB"):
+        cfg.max_file_kb = int(os.environ[ENV_PREFIX + "MAX_FILE_KB"])
+    if os.environ.get(ENV_PREFIX + "ENGINE"):
+        cfg.engine = os.environ[ENV_PREFIX + "ENGINE"]
+
+    # DSH manifest settings override shell environment values.
+    plugin_config_json = os.environ.get(ENV_PREFIX + "PLUGIN_CONFIG_JSON")
+    if plugin_config_json is not None:
+        try:
+            plugin_config = json.loads(plugin_config_json)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                'environment variable "CODEGRAPH_PLUGIN_CONFIG_JSON" must '
+                "contain valid JSON"
+            ) from exc
+        if not isinstance(plugin_config, dict):
+            raise ValueError(
+                'environment variable "CODEGRAPH_PLUGIN_CONFIG_JSON" must '
+                "contain a JSON object"
+            )
+        allowed_fields = {
+            "db_path", "include", "exclude", "max_file_kb", "incremental",
+            "engine", "language_map",
+        }
+        unknown_fields = sorted(set(plugin_config) - allowed_fields)
+        if unknown_fields:
+            raise ValueError(
+                "unsupported plugin config fields: " + ", ".join(unknown_fields)
+            )
+        for key, value in plugin_config.items():
+            if key in ("include", "exclude") and (
+                not isinstance(value, list) or
+                any(not isinstance(pattern, str) for pattern in value)
+            ):
+                raise ValueError(
+                    f'plugin config field "{key}" must be a list of strings, '
+                    f"got {value!r}"
+                )
+            if key == "incremental" and not isinstance(value, bool):
+                raise ValueError(
+                    'plugin config field "incremental" must be a boolean, '
+                    f"got {value!r}"
+                )
+            if key == "language_map":
+                if not isinstance(value, dict):
+                    raise ValueError(
+                        'plugin config field "language_map" must be an object, '
+                        f"got {value!r}"
+                    )
+                if any(not isinstance(language, str)
+                       for language in value.values()):
+                    raise ValueError(
+                        'plugin config field "language_map" must map strings '
+                        "to strings"
+                    )
+            setattr(cfg, key, value)
+
+    if db_path is not None:
+        cfg.db_path = db_path
+
     for key, fallback in (("include", []), ("exclude", DEFAULT_EXCLUDES)):
         if not isinstance(getattr(cfg, key), list) or \
-                any(not isinstance(p, str) for p in getattr(cfg, key)):
+                any(not isinstance(pattern, str) for pattern in getattr(cfg, key)):
             if cfg_file.is_file() and key in data:
                 raise ValueError(
                     f'config field "{key}" must be a list of strings, got '
@@ -122,15 +169,20 @@ def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
                 )
             setattr(cfg, key, fallback)
 
-    # environment overrides beat the file
-    if os.environ.get(ENV_PREFIX + "DB"):
-        cfg.db_path = os.environ[ENV_PREFIX + "DB"]
-    if db_path is not None:
-        cfg.db_path = db_path
-    if os.environ.get(ENV_PREFIX + "MAX_FILE_KB"):
-        cfg.max_file_kb = int(os.environ[ENV_PREFIX + "MAX_FILE_KB"])
-    if os.environ.get(ENV_PREFIX + "ENGINE"):
-        cfg.engine = os.environ[ENV_PREFIX + "ENGINE"]
+    if not isinstance(cfg.incremental, bool):
+        raise ValueError(
+            'config field "incremental" must be a boolean, got '
+            f'{cfg.incremental!r}'
+        )
+    if not isinstance(cfg.language_map, dict):
+        raise ValueError(
+            'config field "language_map" must be an object, got '
+            f'{cfg.language_map!r}'
+        )
+    if any(not isinstance(language, str) for language in cfg.language_map.values()):
+        raise ValueError(
+            'config field "language_map" must map strings to strings'
+        )
 
     if isinstance(cfg.max_file_kb, bool) or not isinstance(cfg.max_file_kb, int):
         raise ValueError(

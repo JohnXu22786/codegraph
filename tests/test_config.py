@@ -187,6 +187,68 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(cfg.engine, "quick")
         self.assertEqual(cfg.max_file_kb, 64)
 
+    def test_plugin_config_json_overrides_environment_and_file(self):
+        (self.root / "codegraph.json").write_text(
+            json.dumps({
+                "db_path": "file.sqlite",
+                "include": "invalid",
+                "exclude": "invalid",
+                "max_file_kb": 128,
+                "incremental": "invalid",
+                "engine": "auto",
+                "language_map": None,
+            }),
+            encoding="utf-8",
+        )
+        plugin_config = {
+            "db_path": "manifest.sqlite",
+            "include": ["src"],
+            "exclude": ["generated"],
+            "max_file_kb": 64,
+            "incremental": False,
+            "engine": "deep",
+            "language_map": {".custom": "python"},
+        }
+        env_db_path = self.root / "environment.sqlite"
+        explicit_db_path = self.root / "explicit.sqlite"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CODEGRAPH_DB": str(env_db_path),
+                "CODEGRAPH_MAX_FILE_KB": "32",
+                "CODEGRAPH_ENGINE": "quick",
+                "CODEGRAPH_PLUGIN_CONFIG_JSON": json.dumps(plugin_config),
+            },
+        ):
+            cfg = load_config(root=str(self.root))
+            explicit_cfg = load_config(
+                root=str(self.root), db_path=str(explicit_db_path)
+            )
+
+        self.assertEqual(cfg.db_path, str((self.root / "manifest.sqlite").resolve()))
+        self.assertEqual(cfg.include, ["src"])
+        self.assertEqual(cfg.exclude, ["generated"])
+        self.assertEqual(cfg.max_file_kb, 64)
+        self.assertFalse(cfg.incremental)
+        self.assertEqual(cfg.engine, "deep")
+        self.assertEqual(cfg.language_map, {".custom": "python"})
+        self.assertEqual(explicit_cfg.db_path, str(explicit_db_path.resolve()))
+
+    def test_plugin_config_json_rejects_invalid_payloads(self):
+        cases = (
+            ("{", "must contain valid JSON"),
+            ("[]", "must contain a JSON object"),
+            (json.dumps({"include": "src"}), "list of strings"),
+            (json.dumps({"unknown": True}), "unsupported plugin config fields"),
+        )
+        for payload, message in cases:
+            with self.subTest(payload=payload):
+                with mock.patch.dict(
+                    os.environ, {"CODEGRAPH_PLUGIN_CONFIG_JSON": payload}
+                ):
+                    with self.assertRaisesRegex(ValueError, message):
+                        load_config(root=str(self.root))
+
     def test_scoped_root_precedes_file_root(self):
         explicit_root = self.root / "explicit"
         environment_root = self.root / "environment"
