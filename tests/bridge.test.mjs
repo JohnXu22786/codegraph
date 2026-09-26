@@ -2,7 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  cpSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -239,6 +247,68 @@ test('bridge reuses one persistent Python process for a root', async () => {
     assert.equal((await byName.codegraph_search.execute({ query: 'cart' })).ok, true)
     const invocations = readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean)
     assert.equal(invocations.length, 1)
+  } finally {
+    await closePlugin()
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
+test('bridge shares query cache across symlink aliases for one root', async (t) => {
+  const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-symlink-cache-'))
+  try {
+    const root = join(scratch, 'proj')
+    const aliasA = join(scratch, 'alias-a')
+    const aliasB = join(scratch, 'alias-b')
+    const logPath = join(scratch, 'python-invocations.log')
+    const python = makePythonWrapper(scratch, logPath)
+    cpSync(PROJ, root, { recursive: true })
+    const source = join(root, 'cache_module.py')
+    writeFileSync(source, 'def alias_cache_marker():\n    return 1\n', 'utf8')
+
+    const kind = process.platform === 'win32' ? 'junction' : 'dir'
+    try {
+      symlinkSync(root, aliasA, kind)
+      symlinkSync(root, aliasB, kind)
+    } catch (error) {
+      const unavailableCodes = new Set([
+        'EACCES', 'EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP',
+      ])
+      if (!unavailableCodes.has(error.code)) throw error
+      t.skip(`directory symlinks unavailable: ${error.message}`)
+      return
+    }
+
+    const tools = await applyOnce({ python })
+    const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool]))
+    assert.equal((await byName.codegraph_reindex.execute({ root: aliasA })).ok, true)
+
+    const initial = await byName.codegraph_search.execute({
+      root: aliasA,
+      query: 'alias_cache_marker',
+    })
+    assert.equal(initial.ok, true)
+    assert.ok(initial.data.some((row) => row.name === 'alias_cache_marker'))
+
+    writeFileSync(source, 'def refreshed_alias_marker():\n    return 2\n', 'utf8')
+    const reindex = await byName.codegraph_reindex.execute({ root: aliasB })
+    assert.equal(reindex.ok, true)
+    assert.ok(reindex.data.files_changed >= 1)
+
+    const refreshed = await byName.codegraph_search.execute({
+      root: aliasA,
+      query: 'alias_cache_marker',
+    })
+    assert.equal(refreshed.ok, true)
+    assert.deepEqual(refreshed.data, [])
+
+    const newMarker = await byName.codegraph_search.execute({
+      root: aliasA,
+      query: 'refreshed_alias_marker',
+    })
+    assert.equal(newMarker.ok, true)
+    assert.ok(newMarker.data.some((row) => row.name === 'refreshed_alias_marker'))
+
+    assert.equal(eventsFrom(logPath).length, 1)
   } finally {
     await closePlugin()
     rmSync(scratch, { recursive: true, force: true })
