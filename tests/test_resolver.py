@@ -137,6 +137,59 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(fid)
         self.assertEqual(self.store.symbol_by_id(fid).qualname, "web/util.fmt")
 
+    def test_js_ts_directory_imports_resolve_index_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = (
+                ("js/app.js", "js/util/index.js", 'const util = require("./util");\n'),
+                ("ts/app.ts", "ts/util/index.ts", 'import * as util from "./util";\n'),
+            )
+            for importer, target, statement in cases:
+                importer_path = root / importer
+                importer_path.parent.mkdir(parents=True, exist_ok=True)
+                index_path = root / target
+                index_path.parent.mkdir(parents=True, exist_ok=True)
+                importer_path.write_text(
+                    statement +
+                    "export function caller() { return util.hello(); }\n",
+                    encoding="utf-8",
+                )
+                index_path.write_text(
+                    "export function hello() { return 1; }\n",
+                    encoding="utf-8",
+                )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                for importer, target, _ in cases:
+                    with self.subTest(importer=importer):
+                        importer_id = store.file_by_path(importer)["id"]
+                        target_id = store.file_by_path(target)["id"]
+                        self.assertEqual(
+                            resolve_module(store, importer_id, "./util"),
+                            target_id,
+                        )
+                        hello_id = resolve_callee(
+                            store, importer_id, "util.hello"
+                        )
+                        self.assertIsNotNone(hello_id)
+                        self.assertEqual(
+                            store.symbol_by_id(hello_id).qualname,
+                            Path(target).with_suffix("").as_posix() + ".hello",
+                        )
+                        resolved_call_ids = {
+                            row["callee_id"] for row in store.conn.execute(
+                                "SELECT callee_id FROM calls WHERE file_id = ?",
+                                (importer_id,),
+                            )
+                        }
+                        self.assertIn(hello_id, resolved_call_ids)
+            finally:
+                store.close()
+
     def test_typescript_runtime_specifiers_prefer_source_extensions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

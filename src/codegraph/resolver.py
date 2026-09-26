@@ -1120,6 +1120,8 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
             e for e in fallback_exts if e not in _EXT_BY_LANG[lang]
         ]
         candidates.extend(target.with_suffix(ext) for ext in ordered)
+        if lang in ("javascript", "typescript") and not target.suffix:
+            candidates.extend(target / f"index{ext}" for ext in ordered)
         return candidates
 
     # --- python ------------------------------------------------------------
