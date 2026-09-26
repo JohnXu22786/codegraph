@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from codegraph import __version__
@@ -140,6 +141,44 @@ class McpServerTest(unittest.TestCase):
                 "Invalid params: tool arguments must be an object",
             )
         build_index.assert_not_called()
+
+    def test_reindex_force_requires_boolean_and_preserves_boolean_value(self):
+        invalid = (None, "false", "true", 0, 1, [], {})
+        malformed = [
+            self._msg(i, "tools/call", {
+                "name": "reindex", "arguments": {"force": value}
+            })
+            for i, value in enumerate(invalid, start=1)
+        ]
+        with patch("codegraph.server.handlers.build_index") as build_index:
+            replies = self._run(malformed)
+
+        self.assertEqual(len(replies), len(invalid))
+        for reply in replies:
+            result = reply["result"]
+            self.assertTrue(result["isError"])
+            self.assertIn("force must be a boolean", result["content"][0]["text"])
+        build_index.assert_not_called()
+
+        valid = [
+            self._msg(len(invalid) + i, "tools/call", {
+                "name": "reindex", "arguments": {"force": force}
+            })
+            for i, force in enumerate((False, True), start=1)
+        ]
+        with patch(
+            "codegraph.server.handlers.build_index",
+            return_value=SimpleNamespace(
+                files_scanned=0, files_changed=0, files_skipped=0,
+                files_removed=0, symbols=0, calls=0, imports=0,
+            ),
+        ) as build_index:
+            replies = self._run(valid)
+
+        self.assertTrue(all(not reply["result"]["isError"] for reply in replies))
+        forwarded = [call.kwargs["force"] for call in build_index.call_args_list]
+        self.assertEqual(forwarded, [False, True])
+        self.assertTrue(all(type(force) is bool for force in forwarded))
 
     def test_omitted_arguments_default_to_empty_object(self):
         replies = self._run([
