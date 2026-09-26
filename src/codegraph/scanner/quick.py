@@ -422,6 +422,11 @@ RE_JS_ESM = re.compile(
     r"^[ \t]*import\s+(?:([^'\";]+?)\s+from\s+)?['\"]([^'\"]+)['\"]", re.M)
 RE_JS_REQUIRE = re.compile(r"require\(\s*['\"]([^'\"]+)['\"]\s*\)")
 RE_JS_REQ_NAMES = re.compile(r"(?:const|let|var)\s*\{?\s*([^=\n]*?)\s*\}?\s*=\s*require")
+RE_JS_REQ_PROPERTY = re.compile(
+    r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*"
+    r"['\"]([^'\"]+)['\"]\s*\)\s*(?:\.\s*([A-Za-z_$][\w$]*)|"
+    r"\[\s*['\"]([^'\"]+)['\"]\s*\])"
+)
 RE_JS_IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 
 
@@ -853,15 +858,23 @@ def _imports_javascript(text, jsx=False):
     # pair each require(...) with the *nearest preceding* binding statement;
     # searching from 0 would mis-bind names in files with several requires
     stmts = list(RE_JS_REQ_NAMES.finditer(text))
+    property_bindings = list(RE_JS_REQ_PROPERTY.finditer(text))
     for m in RE_JS_REQUIRE.finditer(text):
         names = []
+        property_binding = next((candidate for candidate in property_bindings
+                                 if candidate.start() < m.start() < candidate.end()
+                                 and candidate.group(2) == m.group(1)), None)
+        if property_binding is not None:
+            source_name = property_binding.group(3) or property_binding.group(4)
+            names = [f"{source_name} as {property_binding.group(1)}"]
         stmt = None
-        for n in stmts:
-            if n.start() < m.start():
-                stmt = n
-            else:
-                break
-        if stmt is not None:
+        if not names:
+            for n in stmts:
+                if n.start() < m.start():
+                    stmt = n
+                else:
+                    break
+        if stmt is not None and not names:
             names = _javascript_require_names(stmt.group(1))
         imports.append(ImportRec(m.group(1), names, "require", _line_no(text, m.start())))
     return imports

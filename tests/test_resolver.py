@@ -388,6 +388,39 @@ class ResolverTest(unittest.TestCase):
                 finally:
                     store.close()
 
+    def test_commonjs_property_alias_resolves_exported_function(self):
+        for engine in ("quick", "deep", "auto"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "app.js").write_text(
+                    "const bar = require('./util.js').foo;\n"
+                    "function caller() { return bar(); }\n",
+                    encoding="utf-8",
+                )
+                (root / "util.js").write_text(
+                    "export function foo() { return 1; }\n"
+                    "export function extra() { return 3; }\n",
+                    encoding="utf-8",
+                )
+                (root / "other.js").write_text(
+                    "export function bar() { return 2; }\n", encoding="utf-8")
+
+                cfg = load_config(root=str(root))
+                cfg.engine = engine
+                build_index(cfg)
+                store = IndexStore(str(cfg.db_path))
+                try:
+                    app_id = store.file_by_path("app.js")["id"]
+                    import_row = store.imports_for_file(app_id)[0]
+                    self.assertEqual(import_row["names"], '["foo as bar"]')
+                    target_id = resolve_callee(store, app_id, "bar")
+                    self.assertIsNotNone(target_id)
+                    self.assertEqual(
+                        store.symbol_by_id(target_id)["qualname"], "util.foo"
+                    )
+                finally:
+                    store.close()
+
     def test_typescript_runtime_specifiers_prefer_source_extensions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
