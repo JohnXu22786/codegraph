@@ -279,6 +279,35 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_ts_declaration_function_resolves_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.ts").write_text(
+                'import { make } from "./util";\n'
+                "function caller() { make(); }\n",
+                encoding="utf-8",
+            )
+            util = root / "util"
+            util.mkdir()
+            (util / "index.d.ts").write_text(
+                "export declare function make(): void;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.ts")["id"]
+                target_id = resolve_callee(store, app_id, "make")
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(target.name, "make")
+                self.assertEqual(
+                    store.file_by_id(target.file_id)["path"], "util/index.d.ts"
+                )
+            finally:
+                store.close()
+
     def test_javascript_alias_imports_resolve_source_exports(self):
         statements = (
             "import { foo as bar } from './util.js';\n",

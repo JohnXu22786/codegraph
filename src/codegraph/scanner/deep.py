@@ -117,6 +117,7 @@ _DECL = {
     "typescript": {
         "class_declaration": "class",
         "function_declaration": "function",
+        "function_signature": "function",
         "method_definition": "method",
         "interface_declaration": "interface",
         "type_alias_declaration": "type",

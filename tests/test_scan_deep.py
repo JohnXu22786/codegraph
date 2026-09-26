@@ -170,6 +170,14 @@ class DeepTypescriptTest(unittest.TestCase):
             [("./lazy.js", "import", 1)],
         )
 
+    def test_declaration_function_is_indexed(self):
+        src = "export declare function make(): void;\n"
+
+        scan = deep.deep_scan(src, "typescript", "util/index.d.ts")
+
+        self.assertEqual(scan.symbols[0].qualname, "util/index.d.make")
+        self.assertEqual(scan.symbols[0].kind, "function")
+
     def test_generic_calls_are_recorded(self):
         src = "function caller() { foo<T>(); obj.foo<T>(); ns.foo<T>(); }"
 

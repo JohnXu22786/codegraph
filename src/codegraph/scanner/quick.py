@@ -397,6 +397,8 @@ def _scan_python(text, lang, rel_path=None):
 RE_JS_CLASS = re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)")
 RE_JS_FUNC = re.compile(
     r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)")
+RE_JS_DECL_FUNC = re.compile(
+    r"^\s*(?:export\s+)?declare\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)")
 RE_JS_ARROW = re.compile(
     r"^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?"
     r"(?:\(([^)]*)\)|\w+)\s*=>")
@@ -868,7 +870,7 @@ def _scan_javascript(text, lang, rel_path=None):
     depth = 0
     containers = []  # (open_depth, qualname) for class blocks
     items = []
-    decl_pats = (RE_JS_CLASS, RE_JS_FUNC, RE_JS_ARROW, RE_JS_INTERFACE,
+    decl_pats = (RE_JS_CLASS, RE_JS_FUNC, RE_JS_DECL_FUNC, RE_JS_ARROW, RE_JS_INTERFACE,
                  RE_JS_TYPE, RE_JS_METHOD)
     for idx, line in enumerate(lines, start=1):
         m = RE_JS_CLASS.match(line)
@@ -904,7 +906,8 @@ def _scan_javascript(text, lang, rel_path=None):
             while containers and depth <= containers[-1][0]:
                 containers.pop()
             continue
-        m = RE_JS_FUNC.match(line) or RE_JS_ARROW.match(line)
+        m = RE_JS_FUNC.match(line) or RE_JS_DECL_FUNC.match(line) \
+            or RE_JS_ARROW.match(line)
         if m:
             parent = containers[-1][1] if containers else ''
             qual = f"{parent}.{m.group(1)}" if parent else \
