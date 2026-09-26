@@ -67,6 +67,21 @@ class QuickPythonTest(unittest.TestCase):
             [("os", "module", 1), ("sys", "module", 1)],
         )
 
+    def test_multiline_parenthesized_from_import(self):
+        source = "\n".join((
+            "# leading comment",
+            "from package.submodule import (",
+            "    alpha,  # comment containing )",
+            "    beta, " + chr(92),
+            "    gamma,",
+            ")  # trailing comment",
+        )) + "\n"
+        scan = quick.quick_scan(source, "python")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [("package.submodule", ["alpha", "beta", "gamma"], "from", 2)],
+        )
+
     def test_backslash_continuations_at_other_import_boundaries(self):
         sources = (
             "import \\\n    os, sys as system\n",
