@@ -1282,6 +1282,28 @@ def _scan_rust(text, lang, rel_path=None):
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             containers.append((depth, "module", qual))
+            # Keep a function declaration when a complete inline module fits
+            # on one source line; the usual line-by-line pass skips this line.
+            module_depth = 0
+            module_close = None
+            for pos in range(m.end() - 1, len(line)):
+                if line[pos] == "{":
+                    module_depth += 1
+                elif line[pos] == "}":
+                    module_depth -= 1
+                    if module_depth == 0:
+                        module_close = pos
+                        break
+            if module_close is not None:
+                body = line[m.end():module_close]
+                fn = RE_RS_FN.match(body)
+                if fn:
+                    name = fn.group(1)
+                    fn_qual = f"{qual}.{name}"
+                    items.append((idx, depth + 1, SymbolRec(
+                        "function", name, fn_qual, qual, idx, 0,
+                        fn.group(2).strip(),
+                    )))
             depth += line.count("{") - line.count("}")
             while containers and depth <= containers[-1][0]:
                 containers.pop()
@@ -1351,6 +1373,9 @@ def _scan_rust(text, lang, rel_path=None):
             m = RE_RS_FN.match(line)
             if m:
                 line = line[m.end():]
+        m = RE_RS_FN.match(line)
+        if m:
+            line = line[m.end():]
         for callee in _calls_in_line(line, RUST_EXCLUDE):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
