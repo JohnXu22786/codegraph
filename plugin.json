@@ -112,7 +112,7 @@
       "max_file_kb": {"type": "integer", "default": 512},
       "incremental": {"type": "boolean", "default": true},
       "engine": {"type": "string", "enum": ["auto", "quick", "deep"], "default": "auto"},
-      "language_map": {"type": "object"}
+      "language_map": {"type": "object", "additionalProperties": {"type": "string"}}
     }
   },
   "languages": ["python", "javascript", "typescript", "go", "java", "rust"]

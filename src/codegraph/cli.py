@@ -262,12 +262,14 @@ def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        cfg = load_config(root=args.root, config_path=args.config)
+        cfg = load_config(
+            root=args.root,
+            config_path=args.config,
+            db_path=str(Path(args.db).resolve()) if args.db else None,
+        )
     except (OSError, ValueError) as exc:
         print(f"error: cannot load configuration: {exc}", file=sys.stderr)
         return 1
-    if args.db:
-        cfg.db_path = str(Path(args.db).resolve())
     cfg.as_json = args.json
     try:
         args.func(args, cfg)

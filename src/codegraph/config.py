@@ -54,7 +54,7 @@ def default_config(root) -> ProjectConfig:
     )
 
 
-def load_config(root=None, config_path=None) -> ProjectConfig:
+def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
     """Resolve the effective config: flags > environment > file > defaults."""
     cwd = Path.cwd()
     env_root = os.environ.get(ENV_PREFIX + "ROOT")
@@ -72,11 +72,29 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
                 f'configuration file must contain a JSON object: {cfg_file}'
             )
         if "root" in data and not root_is_scoped:
-            cfg.root = str(Path(data["root"]).resolve() if Path(data["root"]).is_absolute()
-                           else (cfg_file.parent / data["root"]).resolve())
+            if not isinstance(data["root"], str):
+                raise ValueError(
+                    'config field "root" must be a string, got '
+                    f'{data["root"]!r}'
+                )
+            cfg.root = str(
+                Path(data["root"]).resolve()
+                if Path(data["root"]).is_absolute()
+                else (cfg_file.parent / data["root"]).resolve()
+            )
         for key in ("include", "exclude", "max_file_kb", "incremental", "engine",
                     "language_map"):
             if key in data:
+                if key == "language_map":
+                    if not isinstance(data[key], dict):
+                        raise ValueError(
+                            'config field "language_map" must be an object, got '
+                            f'{data[key]!r}'
+                        )
+                    if any(not isinstance(value, str) for value in data[key].values()):
+                        raise ValueError(
+                            'config field "language_map" must map strings to strings'
+                        )
                 setattr(cfg, key, data[key])
         if "incremental" in data and not isinstance(cfg.incremental, bool):
             raise ValueError(
@@ -103,6 +121,8 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
     # environment overrides beat the file
     if os.environ.get(ENV_PREFIX + "DB"):
         cfg.db_path = os.environ[ENV_PREFIX + "DB"]
+    if db_path is not None:
+        cfg.db_path = db_path
     if os.environ.get(ENV_PREFIX + "MAX_FILE_KB"):
         cfg.max_file_kb = int(os.environ[ENV_PREFIX + "MAX_FILE_KB"])
     if os.environ.get(ENV_PREFIX + "ENGINE"):
@@ -115,6 +135,11 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
         )
 
     # relative paths are anchored at the project root
+    if not isinstance(cfg.db_path, str):
+        raise ValueError(
+            'config field "db_path" must be a string, got '
+            f'{cfg.db_path!r}'
+        )
     db = Path(cfg.db_path)
     if not db.is_absolute():
         db = Path(cfg.root) / db

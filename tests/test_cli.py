@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from .fixtures import PROJ
 
@@ -128,6 +129,40 @@ class CliSmokeTest(unittest.TestCase):
         stderr = proc.stderr.decode("utf-8", "replace")
         self.assertIn("cannot load configuration", stderr)
         self.assertIn(str(config_path), stderr)
+
+    def test_invalid_config_field_types_are_reported_without_traceback(self):
+        config_path = self.root.parent / "invalid.json"
+        for payload in (
+            {"root": None},
+            {"db_path": None},
+            {"language_map": []},
+        ):
+            with self.subTest(payload=payload):
+                config_path.write_text(json.dumps(payload), encoding="utf-8")
+                with mock.patch.dict(
+                    os.environ, {"CODEGRAPH_ROOT": "", "CODEGRAPH_DB": ""}
+                ):
+                    proc = _run(
+                        ["status", "--config", str(config_path)],
+                        cwd=self.tmp.name,
+                    )
+                self.assertEqual(proc.returncode, 1)
+                stderr = proc.stderr.decode("utf-8", "replace")
+                self.assertIn("cannot load configuration", stderr)
+                self.assertNotIn("Traceback", stderr)
+
+    def test_db_flag_overrides_invalid_config_value(self):
+        config_path = self.root.parent / "invalid-db.json"
+        config_path.write_text(json.dumps({"db_path": None}), encoding="utf-8")
+        db_path = self.root.parent / "override.sqlite"
+
+        proc = _run(
+            ["index", "--config", str(config_path), "--db", str(db_path)],
+            cwd=self.tmp.name,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        self.assertTrue(db_path.exists())
 
 
 if __name__ == "__main__":
