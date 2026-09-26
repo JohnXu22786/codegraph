@@ -375,6 +375,19 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertIn("fmt.Println", calls)
         self.assertIn("helper.Greet", calls)
 
+    def test_go_aliased_single_import(self):
+        src = (
+            'package main\nimport h "example.com/acme/helper"\n'
+            "func main() { h.Greet() }\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.kind) for imp in scan.imports],
+            [("example.com/acme/helper", "module")],
+        )
+
     def test_go_method_and_interface(self):
         src = (
             "package svc\n\n"

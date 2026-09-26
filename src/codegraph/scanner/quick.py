@@ -901,7 +901,9 @@ def _scan_javascript(text, lang, rel_path=None):
 RE_GO_FUNC = re.compile(r"^\s*func\s+(\w+)\s*\(([^)]*)\)")
 RE_GO_METHOD = re.compile(r"^\s*func\s+\((\w+)\s+\*?(\w+)\)\s+(\w+)\s*\(([^)]*)\)")
 RE_GO_TYPE = re.compile(r"^\s*type\s+(\w+)\s+(struct|interface)")
-RE_GO_IMP_SINGLE = re.compile(r"^[ \t]*import\s+\"([^\"]+)\"", re.M)
+RE_GO_IMP_SINGLE = re.compile(
+    r'^[ \t]*import[ \t]+(?:[\w.]+[ \t]+)?"([^"]+)"', re.M
+)
 RE_GO_IMP_BLOCK = re.compile(r"import\s*\(([^)]*)\)", re.S)
 
 
