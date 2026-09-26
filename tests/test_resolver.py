@@ -334,6 +334,88 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(jid)
         self.assertEqual(self.store.symbol_by_id(jid).qualname, "com.demo.Calc.sum")
 
+    def test_java_imports_resolve_from_source_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_root = root / "src" / "main" / "java"
+            package_dir = source_root / "com" / "example" / "util"
+            app_dir = source_root / "com" / "example" / "app"
+            package_dir.mkdir(parents=True)
+            app_dir.mkdir(parents=True)
+            (package_dir / "Util.java").write_text(
+                "package com.example.util;\n"
+                "public class Util {\n"
+                "  public static int compute() { return 1; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (package_dir / "Helper.java").write_text(
+                "package com.example.util;\n"
+                "public class Helper {\n"
+                "  public static int greet() { return 2; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (app_dir / "Runner.java").write_text(
+                "package com.example.app;\n"
+                "import com.example.util.*;\n"
+                "import static com.example.util.Helper.greet;\n"
+                "public class Runner {\n"
+                "  public int viaWildcard() { return Util.compute() + Helper.greet(); }\n"
+                "  public int viaStaticImport() { return compute(); }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                runner_id = store.file_by_path(
+                    "src/main/java/com/example/app/Runner.java"
+                )["id"]
+                wildcard_target = resolve_module(
+                    store, runner_id, "com.example.util.*"
+                )
+                static_target = resolve_module(
+                    store, runner_id, "com.example.util.Helper.greet"
+                )
+                self.assertEqual(
+                    store.file_by_id(wildcard_target)["module"],
+                    "com.example.util",
+                )
+                self.assertEqual(
+                    store.file_by_id(static_target)["path"],
+                    "src/main/java/com/example/util/Helper.java",
+                )
+                compute_id = resolve_callee(store, runner_id, "compute")
+                util_compute_id = resolve_callee(
+                    store, runner_id, "Util.compute"
+                )
+                greet_id = resolve_callee(store, runner_id, "greet")
+                self.assertIsNotNone(compute_id)
+                self.assertIsNotNone(util_compute_id)
+                self.assertIsNotNone(greet_id)
+                self.assertEqual(
+                    store.symbol_by_id(compute_id).qualname,
+                    "com.example.util.Util.compute",
+                )
+                self.assertEqual(
+                    store.symbol_by_id(greet_id).qualname,
+                    "com.example.util.Helper.greet",
+                )
+                resolved_calls = {
+                    row["callee_id"] for row in store.conn.execute(
+                        "SELECT callee_id FROM calls WHERE file_id = ?",
+                        (runner_id,),
+                    )
+                }
+                self.assertIn(compute_id, resolved_calls)
+                self.assertIn(greet_id, resolved_calls)
+            finally:
+                store.close()
+
     def test_rust_mod_and_path_calls(self):
         rid = self._callee("rustx/main.rs", "lib::dist")
         self.assertIsNotNone(rid)
