@@ -9,6 +9,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -349,7 +350,13 @@ class RootSession {
 }
 
 function sessionKey(config, root) {
-  return `${pythonBin(config)}\0${root}`
+  let identityRoot = root
+  try {
+    identityRoot = realpathSync.native(root)
+  } catch {
+    // Keep the lexical path when the root cannot be resolved yet.
+  }
+  return `${pythonBin(config)}\0${identityRoot}`
 }
 
 function evictSessions() {
