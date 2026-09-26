@@ -21,6 +21,7 @@ from .quick import (
     _imports_javascript,
     _imports_python,
     _imports_rust,
+    _rust_impl_owner,
     GO_EXCLUDE,
     JAVA_EXCLUDE,
     JS_EXCLUDE,
@@ -349,6 +350,10 @@ class _Walker:
                     else "function"
             return kind, name, self._doc_of(node)
         if lang == "rust":
+            if node_type == "impl_item":
+                target = node.child_by_field_name("type")
+                if target is not None:
+                    name = _rust_impl_owner(_node_text(target, self.source))
             if node_type == "function_item":
                 kind = "method" if self.stack and self.stack[-1][0] in ("impl", "trait") \
                     else "function"
