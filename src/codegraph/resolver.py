@@ -251,6 +251,8 @@ def _imported_files(store: IndexStore, file_id: int):
                         _java_package_files(store, package)
                     )
         for nm in _names_of(imp):
+            if file["lang"] == "python" and " as " in nm:
+                nm = nm.split(" as ", 1)[0].strip()
             base = imp["module"]
             if file["lang"] == "python" and base.startswith("."):
                 # Python relative imports resolve against the dotted package.
