@@ -820,6 +820,10 @@ def _javascript_import_names(clause):
     names = []
     named = re.search(r"\{([^}]*)\}", clause, re.S)
     prefix = clause[:named.start()] if named else clause
+    namespace = re.search(r"\*\s+as\s+([A-Za-z_$][\w$]*)", prefix)
+    namespace_binding = f"* as {namespace.group(1)}" if namespace else None
+    if namespace:
+        prefix = prefix[:namespace.start()] + prefix[namespace.end():]
     default = re.match(r"\s*([A-Za-z_$][\w$]*)\s*(?:,|$)", prefix)
     if default and default.group(1) != "type":
         names.append(f"default as {default.group(1)}")
@@ -844,6 +848,8 @@ def _javascript_import_names(clause):
                     name for name in RE_JS_IDENT.findall(specifier)
                     if name not in ("as", "type")
                 )
+    if namespace_binding:
+        names.append(namespace_binding)
     return names
 
 

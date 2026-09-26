@@ -443,6 +443,10 @@ def _javascript_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
                 member_path = callee_text[len(local_name) + 1:]
             else:
                 continue
+            if source_name == "*":
+                if not member_path:
+                    continue
+                source_name, _, member_path = member_path.partition(".")
             target = _aliased_symbol_target(
                 store, imp["target_id"], source_name, member_path
             )
