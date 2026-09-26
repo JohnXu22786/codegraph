@@ -1419,36 +1419,57 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
             if module_close is not None:
                 body = line[m.end():module_close]
                 inline_module_lines.add(idx)
-                inline_imports.extend(
-                    ImportRec(item.module, list(item.names), item.kind, idx)
-                    for item in _imports_rust(body)
-                )
-                for fn_index, fn in enumerate(RE_RS_INLINE_FN.finditer(body)):
-                    name = fn.group(1)
-                    fn_qual = f"{qual}.{name}"
-                    inline_function_qualnames.add(fn_qual)
-                    items.append((idx, depth + fn_index + 1, SymbolRec(
-                        "function", name, fn_qual, qual, idx, 0,
-                        fn.group(2).strip(),
-                    )))
-                    open_brace = body.find("{", fn.end())
-                    if open_brace < 0:
-                        continue
-                    fn_depth = 1
-                    close_brace = open_brace + 1
-                    while close_brace < len(body) and fn_depth:
-                        if body[close_brace] == "{":
-                            fn_depth += 1
-                        elif body[close_brace] == "}":
-                            fn_depth -= 1
-                        close_brace += 1
-                    if fn_depth:
-                        continue
-                    fn_body = body[open_brace + 1:close_brace - 1]
-                    inline_calls.extend(
-                        CallRec(fn_qual, callee, idx)
-                        for callee in _calls_in_line(fn_body, RUST_EXCLUDE)
+                if RE_RS_INLINE_MOD.match(body):
+                    body_scan = _scan_rust(
+                        body, lang, rel_path, parent_context=qual
                     )
+                    trailing_symbols.extend(
+                        (idx, SymbolRec(
+                            symbol.kind, symbol.name, symbol.qualname,
+                            symbol.parent, idx, idx, symbol.signature,
+                            symbol.doc, symbol.default_export,
+                        ))
+                        for symbol in body_scan.symbols
+                    )
+                    inline_calls.extend(
+                        CallRec(call.caller, call.callee, idx)
+                        for call in body_scan.calls
+                    )
+                    inline_imports.extend(
+                        ImportRec(item.module, list(item.names), item.kind, idx)
+                        for item in body_scan.imports
+                    )
+                else:
+                    inline_imports.extend(
+                        ImportRec(item.module, list(item.names), item.kind, idx)
+                        for item in _imports_rust(body)
+                    )
+                    for fn_index, fn in enumerate(RE_RS_INLINE_FN.finditer(body)):
+                        name = fn.group(1)
+                        fn_qual = f"{qual}.{name}"
+                        inline_function_qualnames.add(fn_qual)
+                        items.append((idx, depth + fn_index + 1, SymbolRec(
+                            "function", name, fn_qual, qual, idx, 0,
+                            fn.group(2).strip(),
+                        )))
+                        open_brace = body.find("{", fn.end())
+                        if open_brace < 0:
+                            continue
+                        fn_depth = 1
+                        close_brace = open_brace + 1
+                        while close_brace < len(body) and fn_depth:
+                            if body[close_brace] == "{":
+                                fn_depth += 1
+                            elif body[close_brace] == "}":
+                                fn_depth -= 1
+                            close_brace += 1
+                        if fn_depth:
+                            continue
+                        fn_body = body[open_brace + 1:close_brace - 1]
+                        inline_calls.extend(
+                            CallRec(fn_qual, callee, idx)
+                            for callee in _calls_in_line(fn_body, RUST_EXCLUDE)
+                        )
                 trailing = line[module_close + 1:]
                 if trailing.strip():
                     trailing = _split_rust_trailing_functions(trailing)
