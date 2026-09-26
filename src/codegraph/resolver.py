@@ -93,6 +93,18 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     ).fetchone()
     if row:
         return row["id"]
+    if file["lang"] == "rust" and file["module"] and "::" in callee_text:
+        parts = callee_text.split("::")
+        if parts[0] not in ("crate", "self", "super"):
+            # Inline Rust module qualnames include the file module and use dots.
+            qualname = f"{file['module']}.{'.'.join(parts)}"
+            row = store.conn.execute(
+                "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
+                "ORDER BY id LIMIT 1",
+                (file_id, qualname),
+            ).fetchone()
+            if row:
+                return row["id"]
     rows = store.conn.execute(
         "SELECT id FROM symbols WHERE file_id = ? AND name = ?", (file_id, name)
     ).fetchall()
