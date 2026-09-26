@@ -142,7 +142,9 @@ def _exec_overview(args, ctx: ToolContext):
 
 
 def _exec_reindex(args, ctx: ToolContext):
-    force = bool(args.get("force", False))
+    force = args.get("force", False)
+    if not isinstance(force, bool):
+        raise ToolError("force must be a boolean")
     try:
         report = build_index(ctx.cfg, force=force, quiet=True)
     finally:
