@@ -44,6 +44,50 @@ class BuilderTest(unittest.TestCase):
         self.assertGreater(report.imports, 0)
         self.assertEqual(sum(report.languages.values()), ALL_FILES)
 
+    def test_invalid_roots_are_rejected_before_creating_an_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            missing = base / "missing"
+            file_root = base / "project-file"
+            file_root.write_text("not a directory", encoding="utf-8")
+
+            cases = (
+                (missing, FileNotFoundError),
+                (file_root, NotADirectoryError),
+            )
+            for root, error in cases:
+                with self.subTest(root=root):
+                    cfg = load_config(
+                        root=str(root), db_path=str(base / f"{root.name}.db")
+                    )
+                    with self.assertRaises(error):
+                        build_index(cfg)
+                    self.assertFalse(Path(cfg.db_path).exists())
+
+    def test_missing_root_does_not_clear_existing_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "project"
+            root.mkdir()
+            (root / "module.py").write_text(
+                "def target():\n    return 1\n", encoding="utf-8"
+            )
+            cfg = load_config(
+                root=str(root), db_path=str(base / "index.sqlite")
+            )
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            shutil.rmtree(root)
+            with self.assertRaises(FileNotFoundError):
+                build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.file_by_path("module.py"))
+            finally:
+                store.close()
+
     def test_unchanged_second_run_skips_everything(self):
         build_index(self._cfg())
         report = build_index(self._cfg())

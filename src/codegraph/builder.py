@@ -136,6 +136,10 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     report = IndexReport()
     emit = (lambda msg: None) if quiet else (log or print)
     root = Path(cfg.root)
+    if not root.exists():
+        raise FileNotFoundError(f"index root does not exist: {root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"index root is not a directory: {root}")
     discovery_complete = True
 
     def on_discovery_error(exc):
