@@ -270,8 +270,10 @@ def _imported_files(store: IndexStore, file_id: int):
                         _java_package_files(store, package)
                     )
         for nm in _names_of(imp):
-            if file["lang"] == "python" and " as " in nm:
-                nm = nm.split(" as ", 1)[0].strip()
+            if file["lang"] == "python":
+                alias = _split_import_alias(nm)
+                if alias is not None:
+                    nm = alias[0]
             base = imp["module"]
             if file["lang"] == "python" and base.startswith("."):
                 # Python relative imports resolve against the dotted package.
@@ -306,6 +308,11 @@ def _names_of(imp) -> list:
         return json.loads(imp["names"] or "[]")
     except (ValueError, TypeError):
         return []
+
+
+def _split_import_alias(binding: str):
+    parts = re.split(r"\s+as\s+", binding.strip(), maxsplit=1)
+    return parts if len(parts) == 2 else None
 
 
 def _rust_inline_qualname(store: IndexStore, file_id: int, callee_text: str,
@@ -377,10 +384,10 @@ def _python_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
         if imp["kind"] != "from" or not imp["target_id"]:
             continue
         for binding in _names_of(imp):
-            if " as " not in binding:
+            alias = _split_import_alias(binding)
+            if alias is None:
                 continue
-            source_name, local_name = binding.split(" as ", 1)
-            local_name = local_name.strip()
+            source_name, local_name = alias
             if callee_text == local_name:
                 member_path = ""
             elif callee_text.startswith(local_name + "."):
@@ -388,7 +395,7 @@ def _python_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
             else:
                 continue
             target = _aliased_symbol_target(
-                store, imp["target_id"], source_name.strip(), member_path
+                store, imp["target_id"], source_name, member_path
             )
             if target is not None:
                 return target
@@ -404,10 +411,10 @@ def _javascript_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
         if imp["kind"] not in ("import", "require") or not imp["target_id"]:
             continue
         for binding in _names_of(imp):
-            if " as " not in binding:
+            alias = _split_import_alias(binding)
+            if alias is None:
                 continue
-            source_name, local_name = binding.split(" as ", 1)
-            local_name = local_name.strip()
+            source_name, local_name = alias
             if callee_text == local_name:
                 member_path = ""
             elif callee_text.startswith(local_name + "."):
@@ -415,7 +422,7 @@ def _javascript_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
             else:
                 continue
             target = _aliased_symbol_target(
-                store, imp["target_id"], source_name.strip(), member_path
+                store, imp["target_id"], source_name, member_path
             )
             if target is not None:
                 return target
