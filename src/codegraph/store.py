@@ -132,6 +132,18 @@ class IndexStore:
             self.conn.rollback()
             raise
 
+    @contextmanager
+    def read_snapshot(self):
+        """Keep a sequence of reads on one SQLite snapshot."""
+        if self.conn.in_transaction:
+            yield
+            return
+        self.conn.execute("BEGIN")
+        try:
+            yield
+        finally:
+            self.conn.rollback()
+
     # -- files ----------------------------------------------------------------
 
     def upsert_file(self, path, lang, size, digest, lines, module="") -> int:

@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+from functools import wraps
+
 from .store import IndexStore
+
+
+def _consistent_snapshot(func):
+    @wraps(func)
+    def wrapped(store, *args, **kwargs):
+        with store.read_snapshot():
+            return func(store, *args, **kwargs)
+    return wrapped
 
 
 def _find_symbol(store: IndexStore, symbol: str):
@@ -47,6 +57,7 @@ def _resolve_module_files(store: IndexStore, module: str):
     ).fetchall()
 
 
+@_consistent_snapshot
 def query_callers(store: IndexStore, symbol: str, limit: int = 100):
     """Symbols that call ``symbol`` directly (callers of callers via impact)."""
     if limit < 0:
@@ -67,6 +78,7 @@ def query_callers(store: IndexStore, symbol: str, limit: int = 100):
              "callee": r["callee"], "line": r["line"]} for r in rows]
 
 
+@_consistent_snapshot
 def query_callees(store: IndexStore, symbol: str, limit: int = 100):
     """Everything ``symbol`` calls, resolved or not."""
     if limit < 0:
@@ -87,6 +99,7 @@ def query_callees(store: IndexStore, symbol: str, limit: int = 100):
             for r in rows]
 
 
+@_consistent_snapshot
 def query_deps(store: IndexStore, module: str, limit: int = 200):
     """Modules a file/package imports (its dependencies)."""
     if limit < 0:
@@ -105,6 +118,7 @@ def query_deps(store: IndexStore, module: str, limit: int = 200):
              "target_path": r["target_path"] or "", "line": r["line"]} for r in rows]
 
 
+@_consistent_snapshot
 def query_dependents(store: IndexStore, module: str, limit: int = 200):
     """Files/packages that import ``module`` (reverse dependencies).
 
@@ -171,6 +185,7 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
     return results[:limit]
 
 
+@_consistent_snapshot
 def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 200):
     """Transitive callers up to ``depth`` hops — who breaks if this changes.
 
@@ -218,6 +233,7 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
     return results
 
 
+@_consistent_snapshot
 def query_search(store: IndexStore, text: str, limit: int = 20):
     """Full-text search over symbol names, docs and signatures."""
     if limit < 0:
@@ -225,6 +241,7 @@ def query_search(store: IndexStore, text: str, limit: int = 20):
     return store.search(text, limit)
 
 
+@_consistent_snapshot
 def query_stats(store: IndexStore):
     """Aggregate counts for status / overview."""
     counts = {
