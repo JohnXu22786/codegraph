@@ -132,7 +132,7 @@ _DECL = {
     },
     "rust": {"function_item": "function", "function_signature_item": "function",
              "struct_item": "type", "enum_item": "type",
-             "trait_item": "interface", "impl_item": "impl"},
+             "trait_item": "interface"},
 }
 
 _CALLS = {
@@ -332,6 +332,14 @@ class _Walker:
                 if t in _CONTAINERS[self.lang]:
                     self.stack.append((kind, self.items[-1][2].qualname))
                     pushed = True
+        if self.lang == "rust" and t == "impl_item":
+            _, name, _ = self._declare(node, t, "impl")
+            if name:
+                parent = self.stack[-1][1] if self.stack else ""
+                qual = f"{parent}.{name}" if parent else \
+                    (f"{self.module}.{name}" if self.module else name)
+                self.stack.append(("impl", qual))
+                pushed = True
         if t in _CALLS[self.lang]:
             self._record_call(node)
         if t in _IMPORTS[self.lang] and not inline_module:
