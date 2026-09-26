@@ -429,14 +429,20 @@ class _Walker:
         # commonjs require(...) is an import, not a plain call — check this
         # before the generic exclude (require is in the exclude set)
         if head == "require" and self.lang in ("javascript", "typescript"):
-            for imp in _imports_javascript(text):
-                imp.line = node.start_point[0] + 1
-                self.imports.append(imp)
+            if (
+                function is not None
+                and function.type == "identifier"
+                and _node_text(function, self.source) == "require"
+            ):
+                for imp in _imports_javascript(text):
+                    imp.line = node.start_point[0] + 1
+                    self.imports.append(imp)
             return
         if head == "import" and self.lang in ("javascript", "typescript"):
-            for imp in _imports_javascript(text):
-                imp.line = node.start_point[0] + 1
-                self.imports.append(imp)
+            if function is not None and function.type == "import":
+                for imp in _imports_javascript(text):
+                    imp.line = node.start_point[0] + 1
+                    self.imports.append(imp)
             return
         if head in _EXCLUDE[self.lang]:
             return
