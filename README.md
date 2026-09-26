@@ -95,7 +95,7 @@ python -m codegraph export dot -o graph.dot                  # export a visualiz
 | `callees SYMBOL` | Callees | `codegraph callees app.main` |
 | `deps MODULE` | Module dependencies | `codegraph deps web/index.ts` |
 | `dependents MODULE` | Reverse dependencies | `codegraph dependents pkg.pricing` |
-| `impact SYMBOL [--depth N]` | Transitive callers | `codegraph impact billing.price --depth 3` |
+| `impact SYMBOL [--depth N]` | Transitive callers | `codegraph impact services.billing.price --depth 3` |
 | `search TEXT` | Full-text search | `codegraph search "shopping cart"` |
 | `export dot\|json [-o FILE]` | Export the graph | `codegraph export json -o g.json` |
 | `serve` | Start the stdio tool server | `codegraph serve` |

@@ -95,7 +95,7 @@ python -m codegraph export dot -o graph.dot                  # 导出可视化
 | `callees SYMBOL` | 被调用者 | `codegraph callees app.main` |
 | `deps MODULE` | 模块依赖 | `codegraph deps web/index.ts` |
 | `dependents MODULE` | 反向依赖 | `codegraph dependents pkg.pricing` |
-| `impact SYMBOL [--depth N]` | 传递调用者 | `codegraph impact billing.price --depth 3` |
+| `impact SYMBOL [--depth N]` | 传递调用者 | `codegraph impact services.billing.price --depth 3` |
 | `search TEXT` | 全文搜索 | `codegraph search "shopping cart"` |
 | `export dot\|json [-o FILE]` | 导出图 | `codegraph export json -o g.json` |
 | `serve` | 启动 stdio 工具服务器 | `codegraph serve` |
