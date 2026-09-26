@@ -504,6 +504,26 @@ class QuickGoJavaRustTest(unittest.TestCase):
             },
         )
 
+    def test_rust_single_line_inline_module_scans_multiple_functions(self):
+        src = (
+            "mod util { pub fn one() {} pub fn two() { one(); } }\n"
+            "fn caller() { util::two(); }\n"
+        )
+
+        scan = quick.quick_scan(src, "rust", "lib.rs")
+
+        self.assertEqual(
+            {symbol.qualname for symbol in scan.symbols},
+            {"lib.util.one", "lib.util.two", "lib.caller"},
+        )
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("lib.util.two", "one"),
+                ("lib.caller", "util::two"),
+            },
+        )
+
     def test_rust_explicit_module_paths_are_calls(self):
         src = (
             "mod util { pub fn helper() {} }\n"

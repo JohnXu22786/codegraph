@@ -1137,6 +1137,9 @@ RE_RS_INLINE_MOD = re.compile(
     r"^[ \t]*(?:#\[[^\]]*\]\s*)*"
     r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+((?:r#)?\w+)\s*\{")
 RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
+RE_RS_INLINE_FN = re.compile(
+    r"\b(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)"
+)
 RE_RS_TYPE = re.compile(r"^\s*(?:pub\s+)?(struct|enum)\s+(\w+)")
 RE_RS_TRAIT = re.compile(r"^\s*(?:pub\s+)?trait\s+(\w+)")
 RE_RS_IMPL = re.compile(r"^\s*(?:pub\s+)?(?:unsafe\s+)?impl\b")
@@ -1330,6 +1333,8 @@ def _scan_rust(text, lang, rel_path=None):
     depth = 0
     containers = []  # (open_depth, kind, qualname)
     items = []
+    inline_calls = []
+    inline_module_lines = set()
     for idx, line in enumerate(lines, start=1):
         m = RE_RS_INLINE_MOD.match(line)
         if m:
@@ -1351,14 +1356,32 @@ def _scan_rust(text, lang, rel_path=None):
                         break
             if module_close is not None:
                 body = line[m.end():module_close]
-                fn = RE_RS_FN.match(body)
-                if fn:
+                inline_module_lines.add(idx)
+                for fn_index, fn in enumerate(RE_RS_INLINE_FN.finditer(body)):
                     name = fn.group(1)
                     fn_qual = f"{qual}.{name}"
-                    items.append((idx, depth + 1, SymbolRec(
+                    items.append((idx, depth + fn_index + 1, SymbolRec(
                         "function", name, fn_qual, qual, idx, 0,
                         fn.group(2).strip(),
                     )))
+                    open_brace = body.find("{", fn.end())
+                    if open_brace < 0:
+                        continue
+                    fn_depth = 1
+                    close_brace = open_brace + 1
+                    while close_brace < len(body) and fn_depth:
+                        if body[close_brace] == "{":
+                            fn_depth += 1
+                        elif body[close_brace] == "}":
+                            fn_depth -= 1
+                        close_brace += 1
+                    if fn_depth:
+                        continue
+                    fn_body = body[open_brace + 1:close_brace - 1]
+                    inline_calls.extend(
+                        CallRec(fn_qual, callee, idx)
+                        for callee in _calls_in_line(fn_body, RUST_EXCLUDE)
+                    )
             depth += line.count("{") - line.count("}")
             while containers and depth <= containers[-1][0]:
                 containers.pop()
@@ -1421,6 +1444,8 @@ def _scan_rust(text, lang, rel_path=None):
     recs = _finalize(items, n)
     calls = []
     for idx, line in enumerate(lines, start=1):
+        if idx in inline_module_lines:
+            continue
         brace = line.find("{")
         if brace >= 0:
             line = line[brace + 1:]
@@ -1434,6 +1459,7 @@ def _scan_rust(text, lang, rel_path=None):
         for callee in _calls_in_line(line, RUST_EXCLUDE):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
+    calls.extend(inline_calls)
     return FileScan(lang, module, recs, calls, _imports_rust(text))
 
 
