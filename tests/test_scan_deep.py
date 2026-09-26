@@ -394,6 +394,31 @@ class DeepRustTest(unittest.TestCase):
             },
         )
 
+    def test_same_line_functions_keep_call_owners(self):
+        src = (
+            "fn first() { a(); } fn second() { b(); }\n"
+            "mod inner { fn third() { c(); } fn fourth() { d(); } }\n"
+            "struct Widget;\n"
+            "impl Widget { fn draw() { e(); } fn erase() { f(); } }\n"
+        )
+
+        scan = deep.deep_scan(src, "rust", "lib.rs")
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("lib.first", "a"),
+                ("lib.second", "b"),
+                ("lib.inner.third", "c"),
+                ("lib.inner.fourth", "d"),
+                ("lib.Widget.draw", "e"),
+                ("lib.Widget.erase", "f"),
+            },
+        )
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["lib.first"].end, 1)
+        self.assertGreaterEqual(by_q["lib.second"].end, by_q["lib.second"].start)
+
     def test_inline_module_scopes_functions_and_calls(self):
         src = (
             "mod util {\n"
