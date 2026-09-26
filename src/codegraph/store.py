@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS symbols (
     start_line INTEGER NOT NULL,
     end_line  INTEGER NOT NULL,
     signature TEXT NOT NULL DEFAULT '',
-    doc       TEXT NOT NULL DEFAULT ''
+    doc       TEXT NOT NULL DEFAULT '',
+    default_export INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS calls (
@@ -98,6 +99,14 @@ class IndexStore:
         self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
+        symbol_columns = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(symbols)")
+        }
+        if "default_export" not in symbol_columns:
+            self.conn.execute(
+                "ALTER TABLE symbols ADD COLUMN default_export "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
         self.conn.commit()
 
     def close(self):
@@ -268,9 +277,10 @@ class IndexStore:
         for s in scan.symbols:
             cur = self.conn.execute(
                 "INSERT INTO symbols(file_id, kind, name, qualname, parent, "
-                "start_line, end_line, signature, doc) VALUES(?,?,?,?,?,?,?,?,?)",
+                "start_line, end_line, signature, doc, default_export) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (file_id, s.kind, s.name, s.qualname, s.parent,
-                 s.start, s.end, s.signature, s.doc),
+                 s.start, s.end, s.signature, s.doc, int(s.default_export)),
             )
             sid = cur.lastrowid
             self.conn.execute(

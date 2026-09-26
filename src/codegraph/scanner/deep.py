@@ -397,7 +397,16 @@ class _Walker:
             (f"{self.module}.{name}" if self.module else name)
         sig = self._signature_of(node)
         start = node.start_point[0] + 1
-        rec = SymbolRec(kind, name, qual, parent, start, 0, sig, doc)
+        current = node.parent
+        default_export = False
+        while current is not None:
+            if current.type == "export_statement":
+                prefix = _node_text(current, self.source).lstrip()
+                default_export = prefix.startswith("export default ")
+                break
+            current = current.parent
+        rec = SymbolRec(kind, name, qual, parent, start, 0, sig, doc,
+                        default_export)
         self.items.append((start, len(self.stack), rec))
 
     def _require_imports(self, node, text):

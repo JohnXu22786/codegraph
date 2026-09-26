@@ -800,10 +800,14 @@ def _javascript_import_names(clause):
     names = []
     named = re.search(r"\{([^}]*)\}", clause, re.S)
     prefix = clause[:named.start()] if named else clause
-    names.extend(
-        name for name in RE_JS_IDENT.findall(prefix)
-        if name not in ("as", "type")
-    )
+    default = re.match(r"\s*([A-Za-z_$][\w$]*)\s*(?:,|$)", prefix)
+    if default and default.group(1) != "type":
+        names.append(f"default as {default.group(1)}")
+    else:
+        names.extend(
+            name for name in RE_JS_IDENT.findall(prefix)
+            if name not in ("as", "type")
+        )
     if named:
         for specifier in named.group(1).split(","):
             specifier = specifier.strip()
@@ -879,7 +883,10 @@ def _scan_javascript(text, lang, rel_path=None):
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             containers.append((depth, qual))
-            items.append((idx, depth, SymbolRec("class", m.group(1), qual, parent, idx, 0, "")))
+            items.append((idx, depth, SymbolRec(
+                "class", m.group(1), qual, parent, idx, 0, "",
+                default_export=bool(re.match(
+                    r"^\s*export\s+default\b", line))),))
             depth += line.count("{") - line.count("}")
             while containers and depth <= containers[-1][0]:
                 containers.pop()
@@ -913,8 +920,10 @@ def _scan_javascript(text, lang, rel_path=None):
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             sig = m.group(2) if (m.lastindex or 0) >= 2 and m.group(2) is not None else ""
-            items.append((idx, depth, SymbolRec("function", m.group(1), qual, parent, idx, 0,
-                                                sig)))
+            items.append((idx, depth, SymbolRec(
+                "function", m.group(1), qual, parent, idx, 0, sig,
+                default_export=bool(re.match(
+                    r"^\s*export\s+default\b", line)))) )
             depth += line.count("{") - line.count("}")
             while containers and depth <= containers[-1][0]:
                 containers.pop()

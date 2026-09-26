@@ -346,6 +346,48 @@ class ResolverTest(unittest.TestCase):
                 finally:
                     store.close()
 
+    def test_javascript_default_import_resolves_default_symbol(self):
+        for engine in ("quick", "deep", "auto"):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "app.js").write_text(
+                    "import foo from './util.js';\n"
+                    "function caller() { return foo(); }\n",
+                    encoding="utf-8",
+                )
+                (root / "util.js").write_text(
+                    "export default function source() { return 1; }\n"
+                    "export function named() { return 3; }\n",
+                    encoding="utf-8",
+                )
+                (root / "other.js").write_text(
+                    "export function foo() { return 2; }\n", encoding="utf-8")
+
+                cfg = load_config(root=str(root))
+                cfg.engine = engine
+                build_index(cfg)
+                store = IndexStore(str(cfg.db_path))
+                try:
+                    app_id = store.file_by_path("app.js")["id"]
+                    import_row = store.imports_for_file(app_id)[0]
+                    self.assertEqual(import_row["names"], '["default as foo"]')
+                    target_id = resolve_callee(store, app_id, "foo")
+                    self.assertIsNotNone(target_id)
+                    self.assertEqual(
+                        store.symbol_by_id(target_id)["qualname"], "util.source"
+                    )
+                    exports = {
+                        row["name"]: row["default_export"]
+                        for row in store.conn.execute(
+                            "SELECT name, default_export FROM symbols "
+                            "WHERE file_id = ?",
+                            (import_row["target_id"],),
+                        )
+                    }
+                    self.assertEqual(exports, {"source": 1, "named": 0})
+                finally:
+                    store.close()
+
     def test_typescript_runtime_specifiers_prefer_source_extensions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
