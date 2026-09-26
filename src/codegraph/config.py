@@ -67,6 +67,10 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
         raise FileNotFoundError(f"configuration file not found: {cfg_file}")
     if cfg_file.is_file():
         data = json.loads(cfg_file.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(
+                f'configuration file must contain a JSON object: {cfg_file}'
+            )
         if "root" in data and not root_is_scoped:
             cfg.root = str(Path(data["root"]).resolve() if Path(data["root"]).is_absolute()
                            else (cfg_file.parent / data["root"]).resolve())

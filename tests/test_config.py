@@ -59,6 +59,14 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(cfg.max_file_kb, 128)
         self.assertEqual(cfg.engine, "deep")
 
+    def test_non_object_top_level_json_is_rejected(self):
+        config_path = self.root / "codegraph.json"
+        for payload in (None, [], "config", 0, False):
+            with self.subTest(payload=payload):
+                config_path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "must contain a JSON object"):
+                    load_config(root=str(self.root))
+
     def test_incremental_false_is_preserved(self):
         (self.root / "codegraph.json").write_text(
             json.dumps({"incremental": False}), encoding="utf-8",
