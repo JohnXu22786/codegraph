@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 CONFIG_NAME = "codegraph.json"
 ENV_PREFIX = "CODEGRAPH_"
+IS_WINDOWS = os.name == "nt"
+
 
 DEFAULT_EXCLUDES = [
     ".git",
@@ -165,6 +169,52 @@ def write_default_config(root) -> Path:
         "engine": "auto",
         "language_map": {},
     }
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8")
+    content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=root,
+            prefix=f".{CONFIG_NAME}.", delete=False,
+        ) as config_file:
+            temp_path = Path(config_file.name)
+            config_file.write(content)
+            config_file.flush()
+            os.fsync(config_file.fileno())
+        try:
+            os.link(temp_path, path)
+        except FileExistsError:
+            raise FileExistsError(
+                f"configuration already exists: {path}"
+            ) from None
+        except OSError as exc:
+            unsupported = {
+                errno.EACCES, errno.EPERM, errno.EXDEV, errno.ENOSYS,
+            }
+            unsupported.update(
+                getattr(errno, name)
+                for name in ("ENOTSUP", "EOPNOTSUPP")
+                if hasattr(errno, name)
+            )
+            no_windows_link_privilege = getattr(exc, "winerror", None) == 1314
+            if exc.errno not in unsupported and not no_windows_link_privilege:
+                raise
+            if os.path.lexists(path):
+                raise FileExistsError(
+                    f"configuration already exists: {path}"
+                ) from None
+            if IS_WINDOWS:
+                try:
+                    os.rename(temp_path, path)
+                except FileExistsError:
+                    raise FileExistsError(
+                        f"configuration already exists: {path}"
+                    ) from None
+            else:
+                raise OSError(
+                    "cannot safely create configuration without replacing "
+                    f"an existing file: {path}"
+                ) from exc
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     return path

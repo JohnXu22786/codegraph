@@ -48,6 +48,20 @@ class CliSmokeTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
         self.assertTrue((self.root / "codegraph.json").exists())
 
+    def test_init_does_not_overwrite_existing_config(self):
+        config_path = self.root / "codegraph.json"
+        original = '{"engine": "deep", "include": ["src"]}\n'
+        config_path.write_text(original, encoding="utf-8")
+
+        proc = _run(["init", "--root", str(self.root)], cwd=self.tmp.name)
+
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn(
+            "configuration already exists",
+            proc.stderr.decode("utf-8", "replace"),
+        )
+        self.assertEqual(config_path.read_text(encoding="utf-8"), original)
+
     def test_common_options_before_subcommand(self):
         proc = _run(["index", "--root", str(self.root)], cwd=self.tmp.name)
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
