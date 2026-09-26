@@ -17,7 +17,10 @@ SRC = Path(__file__).resolve().parent.parent / "src"
 
 
 def _env():
-    env = os.environ.copy()
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("CODEGRAPH_")
+    }
     env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONIOENCODING"] = "utf-8"
     return env
@@ -42,6 +45,28 @@ class CliSmokeTest(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_subprocess_environment_drops_codegraph_overrides(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CODEGRAPH_ROOT": "/external/project",
+                "CODEGRAPH_DB": "/external/index.sqlite",
+                "CODEGRAPH_ENGINE": "deep",
+                "CODEGRAPH_SENTINEL": "remove-me",
+                "KEEP_ME": "preserved",
+                "PYTHONPATH": "existing-path",
+            },
+        ):
+            with mock.patch("subprocess.run") as run:
+                run.return_value = subprocess.CompletedProcess([], 0, b"", b"")
+                _run(["--version"], cwd=self.tmp.name)
+            env = run.call_args.kwargs["env"]
+
+        self.assertFalse(any(key.startswith("CODEGRAPH_") for key in env))
+        self.assertEqual(env["KEEP_ME"], "preserved")
+        self.assertEqual(env["PYTHONPATH"], str(SRC) + os.pathsep + "existing-path")
+        self.assertEqual(env["PYTHONIOENCODING"], "utf-8")
 
     def test_init_writes_config(self):
         proc = _run(["init", "--root", str(self.root)], cwd=self.tmp.name)
