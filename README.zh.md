@@ -44,21 +44,21 @@ pip install -e ".[treesitter]"
 Windows 命令提示符：
 
 ```cmd
-set PYTHONPATH=src
+set "PYTHONPATH=%CD%\src"
 python -m codegraph --help
 ```
 
 Windows PowerShell：
 
 ```powershell
-$env:PYTHONPATH = "src"
+$env:PYTHONPATH = Join-Path (Get-Location) "src"
 python -m codegraph --help
 ```
 
 Linux/macOS：
 
 ```sh
-export PYTHONPATH=src
+export PYTHONPATH="$(pwd)/src"
 python -m codegraph --help
 ```
 
@@ -70,18 +70,18 @@ python -m codegraph --help
 cd examples/demo
 
 # 1. 建立索引（增量模式，之后可随时刷新）
-codegraph index
+python -m codegraph index
 # indexed 4 files (4 changed, 0 skipped, 0 removed) ... 6 symbols, 7 calls, 3 imports
 
 # 2. 提问
-codegraph callers services.orders.create_order     # 谁调用了 create_order → app.run
-codegraph callees app.run                          # app.run 调用了什么
-codegraph deps services.billing                    # billing 模块依赖什么
-codegraph dependents services.billing              # 谁依赖 billing
-codegraph search "coupon"                          # 全文搜索
-codegraph impact services.billing.price            # 影响面（传递调用者）
-codegraph status                                   # 索引统计
-codegraph export dot -o graph.dot                  # 导出可视化
+python -m codegraph callers services.orders.create_order     # 谁调用了 create_order → app.run
+python -m codegraph callees app.run                          # app.run 调用了什么
+python -m codegraph deps services.billing                    # billing 模块依赖什么
+python -m codegraph dependents services.billing              # 谁依赖 billing
+python -m codegraph search "coupon"                          # 全文搜索
+python -m codegraph impact services.billing.price            # 影响面（传递调用者）
+python -m codegraph status                                   # 索引统计
+python -m codegraph export dot -o graph.dot                  # 导出可视化
 ```
 
 ## 命令行

@@ -44,21 +44,21 @@ Option B, without installing from the repo (run from the repository root):
 Windows Command Prompt:
 
 ```cmd
-set PYTHONPATH=src
+set "PYTHONPATH=%CD%\src"
 python -m codegraph --help
 ```
 
 Windows PowerShell:
 
 ```powershell
-$env:PYTHONPATH = "src"
+$env:PYTHONPATH = Join-Path (Get-Location) "src"
 python -m codegraph --help
 ```
 
 Linux/macOS:
 
 ```sh
-export PYTHONPATH=src
+export PYTHONPATH="$(pwd)/src"
 python -m codegraph --help
 ```
 
@@ -70,18 +70,18 @@ Requires Python ≥ 3.10. Supported languages: Python, JavaScript, TypeScript, G
 cd examples/demo
 
 # 1. Build the index (incremental; refresh at any time)
-codegraph index
+python -m codegraph index
 # indexed 4 files (4 changed, 0 skipped, 0 removed) ... 6 symbols, 7 calls, 3 imports
 
 # 2. Ask questions
-codegraph callers services.orders.create_order     # who calls create_order → app.run
-codegraph callees app.run                          # what app.run calls
-codegraph deps services.billing                    # what the billing module depends on
-codegraph dependents services.billing              # who depends on billing
-codegraph search "coupon"                          # full-text search
-codegraph impact services.billing.price            # impact (transitive callers)
-codegraph status                                   # index statistics
-codegraph export dot -o graph.dot                  # export a visualization
+python -m codegraph callers services.orders.create_order     # who calls create_order → app.run
+python -m codegraph callees app.run                          # what app.run calls
+python -m codegraph deps services.billing                    # what the billing module depends on
+python -m codegraph dependents services.billing              # who depends on billing
+python -m codegraph search "coupon"                          # full-text search
+python -m codegraph impact services.billing.price            # impact (transitive callers)
+python -m codegraph status                                   # index statistics
+python -m codegraph export dot -o graph.dot                  # export a visualization
 ```
 
 ## Command line
