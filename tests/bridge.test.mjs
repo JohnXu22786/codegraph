@@ -279,6 +279,27 @@ test('bridge forwards manifest settings to the Python server', async () => {
   }
 })
 
+test('bridge isolates persistent sessions by manifest settings', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-session-config-'))
+  const root = join(scratch, 'proj')
+  const dbA = join(scratch, 'a.sqlite')
+  const dbB = join(scratch, 'b.sqlite')
+  cpSync(PROJ, root, { recursive: true })
+  try {
+    const toolsA = await applyOnce({ root, db_path: dbA, engine: 'quick' })
+    const reindexA = await toolsA.find((tool) => tool.name === 'codegraph_reindex').execute({})
+    assert.equal(reindexA.ok, true, reindexA.error)
+    const toolsB = await applyOnce({ root, db_path: dbB, engine: 'quick' })
+    const reindexB = await toolsB.find((tool) => tool.name === 'codegraph_reindex').execute({})
+    assert.equal(reindexB.ok, true, reindexB.error)
+    assert.equal(existsSync(dbA), true)
+    assert.equal(existsSync(dbB), true)
+  } finally {
+    await closePlugin()
+    rmSync(scratch, { recursive: true, force: true })
+  }
+})
+
 test('bridge reuses one persistent Python process for a root', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'codegraph-bridge-persistent-'))
   const root = join(scratch, 'proj')

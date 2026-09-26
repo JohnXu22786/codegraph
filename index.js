@@ -381,7 +381,13 @@ function sessionKey(config, root) {
   } catch {
     // Keep the lexical path when the root cannot be resolved yet.
   }
-  return `${pythonBin(config)}\0${identityRoot}`
+  const settings = {}
+  for (const key of PLUGIN_CONFIG_FIELDS) {
+    if (config && Object.hasOwn(config, key) && config[key] !== undefined) {
+      settings[key] = config[key]
+    }
+  }
+  return `${pythonBin(config)}\0${identityRoot}\0${JSON.stringify(settings)}`
 }
 
 function evictSessions() {
