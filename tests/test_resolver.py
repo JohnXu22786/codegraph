@@ -839,6 +839,39 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_single_line_inline_module_resolves_all_functions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.rs").write_text(
+                "mod util { pub fn one() {} pub fn two() { one(); } }\n"
+                "fn caller() { util::two(); }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                one = store.symbol_by_qualname("lib.util.one")
+                two = store.symbol_by_qualname("lib.util.two")
+                self.assertIsNotNone(one)
+                self.assertIsNotNone(two)
+                file_id = store.file_by_path("lib.rs")["id"]
+                edges = {
+                    (store.symbol_by_id(row["caller_id"])["qualname"],
+                     row["callee"], row["callee_id"])
+                    for row in store.conn.execute(
+                        "SELECT caller_id, callee, callee_id FROM calls "
+                        "WHERE file_id = ?",
+                        (file_id,),
+                    )
+                }
+                self.assertIn(("lib.util.two", "one", one["id"]), edges)
+                self.assertIn(("lib.caller", "util::two", two["id"]), edges)
+            finally:
+                store.close()
+
     def test_rust_mod_and_path_calls(self):
         rid = self._callee("rustx/main.rs", "lib::dist")
         self.assertIsNotNone(rid)
