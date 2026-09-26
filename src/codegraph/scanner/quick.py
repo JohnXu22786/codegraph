@@ -394,7 +394,10 @@ def _scan_python(text, lang, rel_path=None):
 # javascript / typescript
 # --------------------------------------------------------------------------
 
-RE_JS_CLASS = re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)")
+RE_JS_CLASS = re.compile(
+    r"^\s*(?:export\s+)?(?:declare\s+)?(?:default\s+)?"
+    r"(?:abstract\s+)?class\s+(\w+)"
+)
 RE_JS_FUNC = re.compile(
     r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)")
 RE_JS_DECL_FUNC = re.compile(
@@ -402,8 +405,12 @@ RE_JS_DECL_FUNC = re.compile(
 RE_JS_ARROW = re.compile(
     r"^\s*(?:export\s+)?(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?"
     r"(?:\(([^)]*)\)|\w+)\s*=>")
-RE_JS_INTERFACE = re.compile(r"^\s*(?:export\s+)?interface\s+(\w+)")
-RE_JS_TYPE = re.compile(r"^\s*(?:export\s+)?type\s+(\w+)\s*=")
+RE_JS_INTERFACE = re.compile(
+    r"^\s*(?:export\s+)?(?:declare\s+)?interface\s+(\w+)"
+)
+RE_JS_TYPE = re.compile(
+    r"^\s*(?:export\s+)?(?:declare\s+)?type\s+(\w+)\s*="
+)
 # method-like lines: modifiers? name( params ) [optional return type] { body
 # (the '{' may carry a one-line body; trailing comments are stripped first).
 # A bare statement call like `helper(x)` has no '{' and never matches.
@@ -909,7 +916,9 @@ def _scan_javascript(text, lang, rel_path=None):
             parent = containers[-1][1] if containers else ''
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
-            kind = "interface" if line.lstrip().startswith(("interface", "export interface")) \
+            kind = "interface" if re.match(
+                r"^\s*(?:(?:export|declare)\s+)*interface\b", line
+            ) \
                 else "type"
             items.append((idx, depth, SymbolRec(kind, m.group(1), qual, parent, idx, 0, "")))
             depth += line.count("{") - line.count("}")

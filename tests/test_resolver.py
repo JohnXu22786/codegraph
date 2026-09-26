@@ -279,6 +279,47 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_quick_ts_declaration_class_resolves_constructor_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.ts").write_text(
+                'import { Box } from "./util";\n'
+                "function caller() { return new Box(); }\n",
+                encoding="utf-8",
+            )
+            util = root / "util"
+            util.mkdir()
+            (util / "index.d.ts").write_text(
+                "export declare class Box { run(): void; }\n"
+                "export declare interface Shape {}\n"
+                "export declare type Key = string;\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.ts")["id"]
+                target_id = resolve_callee(store, app_id, "Box")
+                self.assertIsNotNone(target_id)
+                self.assertEqual(
+                    store.symbol_by_id(target_id)["qualname"], "util/index.Box"
+                )
+                declaration_symbols = {
+                    row["name"]: row["kind"]
+                    for row in store.conn.execute(
+                        "SELECT name, kind FROM symbols WHERE file_id = ?",
+                        (store.file_by_path("util/index.d.ts")["id"],),
+                    )
+                }
+                self.assertEqual(declaration_symbols, {
+                    "Box": "class", "Shape": "interface", "Key": "type"
+                })
+            finally:
+                store.close()
+
     def test_ts_declaration_function_resolves_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
