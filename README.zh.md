@@ -37,10 +37,28 @@ pip install -e .
 
 # 可选：安装 tree-sitter 语法包，显著提升解析精度
 pip install -e ".[treesitter]"
+```
 
-# 方式 B：零安装直接使用（仓库内）
-set PYTHONPATH=src        # Windows
-export PYTHONPATH=src     # Linux/macOS
+方式 B：不安装，直接从仓库运行（请在仓库根目录执行）。
+
+Windows 命令提示符：
+
+```cmd
+set PYTHONPATH=src
+python -m codegraph --help
+```
+
+Windows PowerShell：
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m codegraph --help
+```
+
+Linux/macOS：
+
+```sh
+export PYTHONPATH=src
 python -m codegraph --help
 ```
 
