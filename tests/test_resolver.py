@@ -811,6 +811,110 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_go_blank_import_does_not_shadow_same_package_method(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            (root / "helper").mkdir()
+            (root / "helper/helper.go").write_text(
+                "package helper\nfunc Greet() {}\n", encoding="utf-8")
+            (root / "widget.go").write_text(
+                "package main\n"
+                "type widget struct{}\n"
+                "func (w widget) Greet() {}\n",
+                encoding="utf-8",
+            )
+            (root / "main.go").write_text(
+                'package main\nimport _ "example.com/acme/helper"\n'
+                "func caller(w widget) { w.Greet() }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                target_id = resolve_callee(store, main_id, "w.Greet")
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(
+                    store.file_by_id(target["file_id"])["path"], "widget.go"
+                )
+                edge = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ? AND callee = ?",
+                    (main_id, "w.Greet"),
+                ).fetchone()
+                self.assertEqual(edge["callee_id"], target_id)
+            finally:
+                store.close()
+
+    def test_go_blank_import_does_not_expose_unqualified_symbols(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            (root / "helper").mkdir()
+            (root / "helper/helper.go").write_text(
+                "package helper\nfunc Greet() {}\n", encoding="utf-8")
+            (root / "main.go").write_text(
+                'package main\nimport _ "example.com/acme/helper"\n'
+                "func caller() { Greet() }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                self.assertIsNone(resolve_callee(store, main_id, "Greet"))
+                edge = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ? AND callee = ?",
+                    (main_id, "Greet"),
+                ).fetchone()
+                self.assertIsNone(edge["callee_id"])
+            finally:
+                store.close()
+
+    def test_go_dot_import_still_exposes_unqualified_symbols(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            (root / "helper").mkdir()
+            (root / "helper/helper.go").write_text(
+                "package helper\nfunc Greet() {}\n", encoding="utf-8")
+            (root / "main.go").write_text(
+                'package main\nimport . "example.com/acme/helper"\n'
+                "func caller() { Greet() }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                target_id = resolve_callee(store, main_id, "Greet")
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(
+                    store.file_by_id(target["file_id"])["path"],
+                    "helper/helper.go",
+                )
+                edge = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ? AND callee = ?",
+                    (main_id, "Greet"),
+                ).fetchone()
+                self.assertEqual(edge["callee_id"], target_id)
+            finally:
+                store.close()
+
     def test_go_import_resolves_arbitrarily_named_package_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

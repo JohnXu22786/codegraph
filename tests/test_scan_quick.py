@@ -506,6 +506,25 @@ class QuickGoJavaRustTest(unittest.TestCase):
             [("example.com/acme/one", 3), ("example.com/acme/two", 4)],
         )
 
+    def test_go_blank_and_dot_import_aliases_are_recorded(self):
+        src = (
+            "package main\n"
+            "import (\n"
+            '    _ "example.com/acme/blank"\n'
+            '    . "example.com/acme/dot"\n'
+            ")\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.names) for imp in scan.imports],
+            [
+                ("example.com/acme/blank", ["example.com/acme/blank as _"]),
+                ("example.com/acme/dot", ["example.com/acme/dot as ."]),
+            ],
+        )
+
     def test_go_method_and_interface(self):
         src = (
             "package svc\n\n"
