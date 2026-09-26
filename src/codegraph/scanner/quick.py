@@ -1486,6 +1486,7 @@ def _scan_rust(text, lang, rel_path=None):
         if rec.qualname in inline_function_qualnames:
             rec.end = rec.start
     recs.extend(symbol for _, symbol in trailing_symbols)
+    recs.sort(key=lambda rec: rec.start)
     calls = []
     for idx, line in enumerate(lines, start=1):
         if idx in inline_module_lines:
