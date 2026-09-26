@@ -106,7 +106,7 @@
     "type": "object",
     "properties": {
       "root": {"type": "string", "description": "project root"},
-      "db_path": {"type": "string", "description": "index database location (default <root>/.cg/cg.sqlite)"},
+      "db_path": {"type": "string", "minLength": 1, "description": "index database location (default <root>/.cg/cg.sqlite)"},
       "include": {"type": "array", "items": {"type": "string"}, "description": "if non-empty, only matching paths are indexed"},
       "exclude": {"type": "array", "items": {"type": "string"}, "description": "glob/dir patterns skipped while walking"},
       "max_file_kb": {"type": "integer", "default": 512},

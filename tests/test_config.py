@@ -103,23 +103,44 @@ class LoadConfigTest(unittest.TestCase):
                     with mock.patch.dict(os.environ, {"CODEGRAPH_DB": ""}):
                         load_config(root=str(self.root))
 
-    def test_env_db_overrides_invalid_file_value(self):
+    def test_empty_effective_db_path_is_rejected(self):
         (self.root / "codegraph.json").write_text(
-            json.dumps({"db_path": None}), encoding="utf-8",
+            json.dumps({"db_path": ""}), encoding="utf-8",
         )
+        with mock.patch.dict(os.environ, {"CODEGRAPH_DB": ""}):
+            with self.assertRaisesRegex(
+                ValueError, '"db_path" must not be empty'
+            ):
+                load_config(root=str(self.root))
+
+    def test_env_db_overrides_invalid_file_value(self):
         db_path = self.root / "override.sqlite"
-        with mock.patch.dict(os.environ, {"CODEGRAPH_DB": str(db_path)}):
-            cfg = load_config(root=str(self.root))
-        self.assertEqual(cfg.db_path, str(db_path.resolve()))
+        for value in (None, ""):
+            with self.subTest(value=value):
+                (self.root / "codegraph.json").write_text(
+                    json.dumps({"db_path": value}), encoding="utf-8",
+                )
+                with mock.patch.dict(os.environ, {"CODEGRAPH_DB": str(db_path)}):
+                    cfg = load_config(root=str(self.root))
+                self.assertEqual(cfg.db_path, str(db_path.resolve()))
 
     def test_explicit_db_path_overrides_invalid_file_value(self):
-        (self.root / "codegraph.json").write_text(
-            json.dumps({"db_path": None}), encoding="utf-8",
-        )
-        db_path = self.root / "override.sqlite"
-        with mock.patch.dict(os.environ, {"CODEGRAPH_DB": ""}):
-            cfg = load_config(root=str(self.root), db_path=str(db_path))
-        self.assertEqual(cfg.db_path, str(db_path.resolve()))
+        env_db_path = self.root / "env.sqlite"
+        explicit_db_path = self.root / "explicit.sqlite"
+        for value in (None, ""):
+            with self.subTest(value=value):
+                (self.root / "codegraph.json").write_text(
+                    json.dumps({"db_path": value}), encoding="utf-8",
+                )
+                with mock.patch.dict(
+                    os.environ, {"CODEGRAPH_DB": str(env_db_path)}
+                ):
+                    cfg = load_config(
+                        root=str(self.root), db_path=str(explicit_db_path)
+                    )
+                self.assertEqual(
+                    cfg.db_path, str(explicit_db_path.resolve())
+                )
 
     def test_language_map_must_map_strings_to_strings(self):
         config_path = self.root / "codegraph.json"
