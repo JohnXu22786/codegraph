@@ -279,6 +279,21 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(replies[0]["error"]["code"], -32600)
         self.assertEqual(replies[0]["error"]["message"], "Invalid Request")
 
+    def test_missing_or_non_string_method_returns_invalid_request(self):
+        malformed = (None, [], {}, 0, False)
+        messages = [
+            {"jsonrpc": "2.0", "id": i, "method": method}
+            for i, method in enumerate(malformed, start=1)
+        ]
+        messages.append({"jsonrpc": "2.0", "id": len(messages) + 1})
+
+        replies = self._run(messages)
+
+        self.assertEqual(len(replies), len(messages))
+        for reply in replies:
+            self.assertEqual(reply["error"]["code"], -32600)
+            self.assertEqual(reply["error"]["message"], "Invalid Request")
+
     def test_deps_tool_works(self):
         """Regression: deps used to crash with a KeyError in its renderer."""
         replies = self._run([self._msg(1, "tools/call", {
