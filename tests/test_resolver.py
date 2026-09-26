@@ -137,6 +137,37 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(fid)
         self.assertEqual(self.store.symbol_by_id(fid).qualname, "web/util.fmt")
 
+    def test_typescript_runtime_specifiers_prefer_source_extensions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cases = (
+                ("app.ts", "./util.js", "util.ts"),
+                ("app.mts", "./util.mjs", "util.mts"),
+                ("app.cts", "./util.cjs", "util.cts"),
+                ("app.js", "./util.js", "util.js"),
+            )
+            for importer, specifier, _ in cases:
+                (root / importer).write_text(
+                    f'import "{specifier}";\n', encoding="utf-8")
+            for suffix in (".ts", ".js", ".mts", ".mjs", ".cts", ".cjs"):
+                (root / f"util{suffix}").write_text(
+                    "export const value = true;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                for importer, specifier, expected in cases:
+                    with self.subTest(importer=importer):
+                        file_id = store.file_by_path(importer)["id"]
+                        target_id = store.file_by_path(expected)["id"]
+                        self.assertEqual(
+                            resolve_module(store, file_id, specifier), target_id
+                        )
+            finally:
+                store.close()
+
     def test_js_require_with_different_extension(self):
         # app.js requires "./util.js" but the file on disk is util.ts
         fid = self._callee("web/app.js", "fmt")

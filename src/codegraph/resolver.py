@@ -33,6 +33,11 @@ _EXT_BY_LANG = {
     "java": [".java"],
     "rust": [".rs"],
 }
+_TS_RUNTIME_EXTENSION_SUBSTITUTIONS = {
+    ".js": (".ts", ".tsx", ".d.ts", ".js", ".jsx"),
+    ".mjs": (".mts", ".d.mts", ".mjs"),
+    ".cjs": (".cts", ".d.cts", ".cjs"),
+}
 
 # JavaScript / TypeScript relative imports may use either ecosystem's
 # extensions (require("./util.js") can resolve to util.ts), but must not
@@ -999,6 +1004,13 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
         target = rel_of(file_dir / module_text)
         if target is None:
             return []
+        if lang == "typescript" and target.suffix in _TS_RUNTIME_EXTENSION_SUBSTITUTIONS:
+            # TypeScript specifiers name emitted files, so resolve source and
+            # declaration extensions before the corresponding JS file.
+            return [
+                rel for ext in _TS_RUNTIME_EXTENSION_SUBSTITUTIONS[target.suffix]
+                if (rel := rel_of(target.with_suffix(ext))) is not None
+            ]
         candidates = []
         if target.suffix:
             candidates.append(target)
