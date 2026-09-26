@@ -17,7 +17,7 @@ from .scanner.walk import discover_files
 from .store import IndexStore
 
 _RESOLVER_VERSION = 8
-_SCANNER_VERSION = 3
+_SCANNER_VERSION = 4
 
 
 @dataclass
