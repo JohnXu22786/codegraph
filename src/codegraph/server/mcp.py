@@ -62,8 +62,13 @@ def _dispatch(msg: dict, ctx: ToolContext, log_stream) -> "dict | None":
         return {"jsonrpc": "2.0", "id": msg_id,
                 "result": {"tools": tool_definitions()}}
     if method == "tools/call":
-        name = params.get("name", "")
+        name = params.get("name")
         args = params.get("arguments", {})
+        if not isinstance(name, str) or not name:
+            return _error(
+                msg_id, -32602,
+                "Invalid params: tool name must be a non-empty string",
+            )
         if not isinstance(args, dict):
             return _error(msg_id, -32602,
                           "Invalid params: tool arguments must be an object")
