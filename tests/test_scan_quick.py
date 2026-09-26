@@ -547,6 +547,28 @@ class QuickGoJavaRustTest(unittest.TestCase):
             },
         )
 
+    def test_rust_inline_module_keeps_trailing_top_level_function(self):
+        scan = quick.quick_scan(
+            "mod util { pub fn run() { dependency(); } } "
+            "fn caller() { util::run(); }\n",
+            "rust",
+            "lib.rs",
+        )
+
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(
+            set(by_q), {"lib.util.run", "lib.caller"}
+        )
+        self.assertEqual(by_q["lib.util.run"].end, 1)
+        self.assertEqual(by_q["lib.caller"].end, 1)
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("lib.util.run", "dependency"),
+                ("lib.caller", "util::run"),
+            },
+        )
+
     def test_rust_explicit_module_paths_are_calls(self):
         src = (
             "mod util { pub fn helper() {} }\n"
