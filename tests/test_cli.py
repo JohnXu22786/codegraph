@@ -149,6 +149,7 @@ class CliSmokeTest(unittest.TestCase):
         for payload in (
             {"root": None},
             {"db_path": None},
+            {"db_path": ""},
             {"language_map": []},
         ):
             with self.subTest(payload=payload):
@@ -177,6 +178,25 @@ class CliSmokeTest(unittest.TestCase):
 
         self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
         self.assertTrue(db_path.exists())
+
+    def test_db_flag_overrides_env_and_empty_config_value(self):
+        config_path = self.root.parent / "empty-db.json"
+        config_path.write_text(json.dumps({"db_path": ""}), encoding="utf-8")
+        env_db_path = self.root.parent / "env-override.sqlite"
+        explicit_db_path = self.root.parent / "cli-override.sqlite"
+
+        with mock.patch.dict(os.environ, {"CODEGRAPH_DB": str(env_db_path)}):
+            proc = _run(
+                [
+                    "index", "--config", str(config_path), "--db",
+                    str(explicit_db_path), "--root", str(self.root),
+                ],
+                cwd=self.tmp.name,
+            )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+        self.assertTrue(explicit_db_path.exists())
+        self.assertFalse(env_db_path.exists())
 
 
 if __name__ == "__main__":

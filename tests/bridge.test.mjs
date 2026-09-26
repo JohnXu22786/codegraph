@@ -161,6 +161,12 @@ test('npm package includes the self-describing plugin manifest', () => {
   assert.ok(files.includes('plugin.json'))
 })
 
+test('plugin manifest requires a non-empty db_path', () => {
+  const manifest = JSON.parse(readFileSync(join(PLUGIN_DIR, 'plugin.json'), 'utf8'))
+  assert.equal(manifest.configSchema.properties.db_path.type, 'string')
+  assert.equal(manifest.configSchema.properties.db_path.minLength, 1)
+})
+
 test('apply registers exactly the eight documented tools', async () => {
   const tools = await applyOnce()
   assert.deepEqual(

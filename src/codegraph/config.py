@@ -144,6 +144,8 @@ def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
             'config field "db_path" must be a string, got '
             f'{cfg.db_path!r}'
         )
+    if not cfg.db_path:
+        raise ValueError('config field "db_path" must not be empty')
     db = Path(cfg.db_path)
     if not db.is_absolute():
         db = Path(cfg.root) / db
