@@ -312,6 +312,18 @@ class _Walker:
         go_scope = self.lang == "go" and t in _GO_SCOPE_NODES
         if go_scope:
             self.go_name_scopes.append(set())
+        inline_module = (
+            self.lang == "rust" and t == "mod_item" and
+            node.child_by_field_name("body") is not None
+        )
+        if inline_module:
+            name = self._name_of(node)
+            if name:
+                parent = self.stack[-1][1] if self.stack else ""
+                qual = f"{parent}.{name}" if parent else \
+                    (f"{self.module}.{name}" if self.module else name)
+                self.stack.append(("module", qual))
+                pushed = True
         if decl_kind is not None:
             kind, name, doc = self._declare(node, t, decl_kind)
             if name:
@@ -321,7 +333,7 @@ class _Walker:
                     pushed = True
         if t in _CALLS[self.lang]:
             self._record_call(node)
-        if t in _IMPORTS[self.lang]:
+        if t in _IMPORTS[self.lang] and not inline_module:
             text = _node_text(node, self.source)
             for imp in _IMPORT_FNS[self.lang](text):
                 imp.line = node.start_point[0] + 1

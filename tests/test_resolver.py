@@ -477,6 +477,34 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_inline_module_call_edge_is_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.rs").write_text(
+                "mod util {\n"
+                "    pub fn helper() { dependency(); }\n"
+                "}\n"
+                "fn caller() { util::helper(); }\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                helper = store.symbol_by_qualname("lib.util.helper")
+                self.assertIsNotNone(helper)
+                file_id = store.file_by_path("lib.rs")["id"]
+                edge = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ? "
+                    "AND callee = ?",
+                    (file_id, "util::helper"),
+                ).fetchone()
+                self.assertIsNotNone(edge)
+                self.assertEqual(edge["callee_id"], helper["id"])
+            finally:
+                store.close()
+
     def test_rust_mod_and_path_calls(self):
         rid = self._callee("rustx/main.rs", "lib::dist")
         self.assertIsNotNone(rid)

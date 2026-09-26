@@ -426,6 +426,25 @@ class QuickGoJavaRustTest(unittest.TestCase):
         # macros like println! must not be reported as calls
         self.assertNotIn("println", {c.callee.split("::")[0] for c in main.calls})
 
+    def test_rust_inline_module_scopes_functions_and_calls(self):
+        src = (
+            "mod util {\n"
+            "    pub fn helper() { dependency(); }\n"
+            "    fn internal() { helper(); }\n"
+            "}\n"
+            "fn caller() { util::helper(); }\n"
+        )
+
+        scan = quick.quick_scan(src, "rust", "lib.rs")
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["lib.util.helper"].kind, "function")
+        self.assertEqual(by_q["lib.util.helper"].parent, "lib.util")
+        self.assertEqual(by_q["lib.util.internal"].kind, "function")
+        calls = {(call.caller, call.callee) for call in scan.calls}
+        self.assertIn(("lib.util.helper", "dependency"), calls)
+        self.assertIn(("lib.util.internal", "helper"), calls)
+        self.assertIn(("lib.caller", "util::helper"), calls)
+
     def test_rust_trait(self):
         src = (
             "pub trait Shape {\n"

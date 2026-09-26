@@ -1076,6 +1076,9 @@ RE_RS_USE = re.compile(
 RE_RS_MOD = re.compile(
     r"^[ \t]*(?:#\[[^\]]*\]\s*)*"
     r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+(\w+)\s*;", re.M)
+RE_RS_INLINE_MOD = re.compile(
+    r"^[ \t]*(?:#\[[^\]]*\]\s*)*"
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+((?:r#)?\w+)\s*\{")
 RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
 RE_RS_TYPE = re.compile(r"^\s*(?:pub\s+)?(struct|enum)\s+(\w+)")
 RE_RS_TRAIT = re.compile(r"^\s*(?:pub\s+)?trait\s+(\w+)")
@@ -1271,6 +1274,16 @@ def _scan_rust(text, lang, rel_path=None):
     containers = []  # (open_depth, kind, qualname)
     items = []
     for idx, line in enumerate(lines, start=1):
+        m = RE_RS_INLINE_MOD.match(line)
+        if m:
+            parent = containers[-1][2] if containers else ""
+            qual = f"{parent}.{m.group(1)}" if parent else \
+                (f"{module}.{m.group(1)}" if module else m.group(1))
+            containers.append((depth, "module", qual))
+            depth += line.count("{") - line.count("}")
+            while containers and depth <= containers[-1][0]:
+                containers.pop()
+            continue
         m = RE_RS_TYPE.match(line)
         if m:
             parent = containers[-1][2] if containers else ""
@@ -1315,7 +1328,8 @@ def _scan_rust(text, lang, rel_path=None):
             parent = containers[-1][2] if containers else ""
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
-            kind = "method" if containers else "function"
+            kind = "method" if containers and containers[-1][1] in ("impl", "trait") \
+                else "function"
             items.append((idx, depth, SymbolRec(kind, m.group(1), qual, parent, idx, 0,
                                                 m.group(2).strip())))
             depth += line.count("{") - line.count("}")
