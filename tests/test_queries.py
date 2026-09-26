@@ -159,6 +159,28 @@ class QueryTest(unittest.TestCase):
         got2 = sorted(r["path"] for r in rows2)
         self.assertEqual(got2, ["web/app.js", "web/index.ts"])
 
+    def test_typescript_declaration_index_has_canonical_module_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.ts").write_text(
+                'import { make } from "./util";\n', encoding="utf-8")
+            util = root / "util"
+            util.mkdir()
+            (util / "index.d.ts").write_text(
+                "export declare function make(): void;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                declaration = store.file_by_path("util/index.d.ts")
+                self.assertEqual(declaration["module"], "util/index")
+                rows = query_dependents(store, "util/index")
+                self.assertEqual([row["path"] for row in rows], ["app.ts"])
+            finally:
+                store.close()
+
     def test_dependents_include_all_files_in_java_package(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

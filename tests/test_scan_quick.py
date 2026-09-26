@@ -374,7 +374,7 @@ class QuickJavascriptTest(unittest.TestCase):
             "util/index.d.ts",
         )
 
-        self.assertEqual(scan.symbols[0].qualname, "util/index.d.make")
+        self.assertEqual(scan.symbols[0].qualname, "util/index.make")
         self.assertEqual(scan.symbols[0].kind, "function")
 
     def test_arrow_function_and_interface(self):
