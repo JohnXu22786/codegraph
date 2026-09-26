@@ -41,7 +41,7 @@ _GO_SCOPE_NODES = {
     "block", "function_declaration", "method_declaration", "func_literal",
     "for_statement", "if_statement", "expression_switch_statement",
     "type_switch_statement", "select_statement", "expression_case",
-    "type_case", "communication_case",
+    "type_case", "communication_case", "type_spec", "type_alias",
 }
 
 _language_cache = {}
@@ -210,7 +210,7 @@ class _Walker:
         self.source = source
         self.lines = lines
         self.go_generic_functions = set()
-        self.go_value_scopes = [set()]
+        self.go_name_scopes = [set()]
         self.stack = []  # (kind, qualname) of open containers
         self.items = []  # (start, depth, SymbolRec)
         self.raw_calls = []  # (callee, line)
@@ -251,8 +251,11 @@ class _Walker:
                 return name
         return ""
 
-    def _go_declared_values(self, node):
-        if node.type in ("parameter_declaration", "var_spec", "const_spec"):
+    def _go_declared_names(self, node):
+        if node.type in (
+            "parameter_declaration", "var_spec", "const_spec",
+            "type_parameter_declaration", "type_spec", "type_alias",
+        ):
             return {
                 _node_text(name, self.source).strip()
                 for name in node.children_by_field_name("name")
@@ -273,8 +276,8 @@ class _Walker:
                 pending.extend(current.children)
         return names
 
-    def _go_value_is_bound(self, name):
-        return any(name in scope for scope in self.go_value_scopes)
+    def _go_name_is_bound(self, name):
+        return any(name in scope for scope in self.go_name_scopes)
 
     def _signature_of(self, node):
         for field in ("parameters", "formal_parameters"):
@@ -307,7 +310,7 @@ class _Walker:
         pushed = False
         go_scope = self.lang == "go" and t in _GO_SCOPE_NODES
         if go_scope:
-            self.go_value_scopes.append(set())
+            self.go_name_scopes.append(set())
         if decl_kind is not None:
             kind, name, doc = self._declare(node, t, decl_kind)
             if name:
@@ -325,9 +328,12 @@ class _Walker:
         for child in node.children:
             self.walk(child)
         if self.lang == "go":
-            self.go_value_scopes[-1].update(self._go_declared_values(node))
+            names = self._go_declared_names(node)
+            self.go_name_scopes[-1].update(names)
         if go_scope:
-            self.go_value_scopes.pop()
+            self.go_name_scopes.pop()
+            if self.lang == "go" and t in ("type_spec", "type_alias"):
+                self.go_name_scopes[-1].update(names)
         if pushed:
             self.stack.pop()
 
@@ -395,7 +401,7 @@ class _Walker:
             if target is not None and target.type == "identifier" \
                     and (callee := _node_text(target, self.source).strip()) \
                     in self.go_generic_functions \
-                    and not self._go_value_is_bound(callee):
+                    and not self._go_name_is_bound(callee):
                 cut = callee
         m = re.search(r"([A-Za-z_$][\w$]*(?:(?:::|\.)[A-Za-z_$][\w$]*)*)$", cut)
         if not m:

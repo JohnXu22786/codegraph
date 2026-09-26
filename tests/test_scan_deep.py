@@ -175,6 +175,41 @@ class DeepGoTest(unittest.TestCase):
             [("demo.caller", "foo"), ("demo.caller", "make")],
         )
 
+    def test_local_types_and_type_parameters_shadow_generic_function_names(self):
+        src = (
+            "package demo\n"
+            "func Item[T any]() {}\n"
+            "func typeParameter[Item any]() {\n"
+            "    Item[int]()\n"
+            "}\n"
+            "func localType() {\n"
+            "    type Item[T any] int\n"
+            "    Item[int]()\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "caller.go")
+
+        self.assertEqual(scan.calls, [])
+
+    def test_generic_type_parameters_do_not_leak_to_enclosing_scope(self):
+        src = (
+            "package demo\n"
+            "func T[A any]() {}\n"
+            "func localType() {\n"
+            "    type Local[T any] int\n"
+            "    T[int]()\n"
+            "}\n"
+            "func localAlias() {\n"
+            "    type Alias[T any] = []T\n"
+            "    T[int]()\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "caller.go")
+
+        self.assertEqual([call.callee for call in scan.calls], ["T", "T"])
+
     def test_imported_generic_call_and_conversion_shapes_are_not_guessed(self):
         src = (
             "package demo\n"
