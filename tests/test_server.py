@@ -97,6 +97,24 @@ class McpServerTest(unittest.TestCase):
         self.assertIn("error", replies[0])
         self.assertEqual(replies[0]["error"]["code"], -32602)
 
+    def test_non_string_tool_names_are_invalid_params(self):
+        malformed = (None, [], {}, 0, False, "")
+        messages = [
+            self._msg(i, "tools/call", {"name": name})
+            for i, name in enumerate(malformed, start=1)
+        ]
+        messages.append(self._msg(len(messages) + 1, "tools/call", {}))
+
+        replies = self._run(messages)
+
+        self.assertEqual(len(replies), len(messages))
+        for reply in replies:
+            self.assertEqual(reply["error"]["code"], -32602)
+            self.assertEqual(
+                reply["error"]["message"],
+                "Invalid params: tool name must be a non-empty string",
+            )
+
     def test_invalid_arguments_are_tool_errors(self):
         replies = self._run([self._msg(1, "tools/call", {
             "name": "callers", "arguments": {}})])
