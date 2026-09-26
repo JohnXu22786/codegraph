@@ -326,7 +326,10 @@ class DeepRustTest(unittest.TestCase):
 
     def test_trait_impl_methods_belong_to_implementing_type(self):
         src = (
-            "trait Shape { fn area(&self) -> f64; }\n"
+            "trait Shape {\n"
+            "    fn area(&self) -> f64;\n"
+            "    fn label(&self) { self.area(); }\n"
+            "}\n"
             "struct Square;\n"
             "impl Shape for Square { fn area(&self) -> f64 { 1.0 } }\n"
             "impl Square { fn perimeter(&self) -> f64 { 4.0 } }\n"
@@ -336,6 +339,14 @@ class DeepRustTest(unittest.TestCase):
         by_q = {symbol.qualname: symbol for symbol in scan.symbols}
 
         self.assertEqual(by_q["geometry.Shape"].kind, "interface")
+        self.assertEqual(by_q["geometry.Shape.area"].kind, "method")
+        self.assertEqual(
+            by_q["geometry.Shape.area"].parent, "geometry.Shape"
+        )
+        self.assertEqual(by_q["geometry.Shape.label"].kind, "method")
+        self.assertEqual(
+            by_q["geometry.Shape.label"].parent, "geometry.Shape"
+        )
         self.assertEqual(by_q["geometry.Square.area"].kind, "method")
         self.assertEqual(by_q["geometry.Square.area"].parent, "geometry.Square")
         self.assertEqual(by_q["geometry.Square.perimeter"].kind, "method")
