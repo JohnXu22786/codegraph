@@ -399,6 +399,26 @@ class _Walker:
         rec = SymbolRec(kind, name, qual, parent, start, 0, sig, doc)
         self.items.append((start, len(self.stack), rec))
 
+    def _require_imports(self, node, text):
+        imports = _imports_javascript(text)
+        context = node
+        statement_types = {
+            "expression_statement", "lexical_declaration", "return_statement",
+            "throw_statement", "variable_declaration",
+        }
+        while context.parent is not None and context.type not in statement_types:
+            context = context.parent
+        contextual = _imports_javascript(_node_text(context, self.source))
+        for imp in imports:
+            if imp.kind != "require":
+                continue
+            matches = [candidate for candidate in contextual
+                       if candidate.kind == "require"
+                       and candidate.module == imp.module]
+            if matches:
+                imp.names = matches[-1].names
+        return imports
+
     def _record_call(self, node):
         text = _node_text(node, self.source)
         cut = text.split("(", 1)[0]
@@ -434,7 +454,7 @@ class _Walker:
                 and function.type == "identifier"
                 and _node_text(function, self.source) == "require"
             ):
-                for imp in _imports_javascript(text):
+                for imp in self._require_imports(node, text):
                     imp.line = node.start_point[0] + 1
                     self.imports.append(imp)
             return
