@@ -1385,7 +1385,7 @@ def _split_rust_trailing_functions(text):
     return "\n".join(fragments) if len(fragments) > 1 else text
 
 
-def _scan_rust(text, lang, rel_path=None):
+def _scan_rust(text, lang, rel_path=None, parent_context=""):
     module = languages.module_of(rel_path, lang) if rel_path else ""
     lines = _rust_mask_comments(text).splitlines()
     n = len(lines)
@@ -1399,7 +1399,7 @@ def _scan_rust(text, lang, rel_path=None):
     for idx, line in enumerate(lines, start=1):
         m = RE_RS_INLINE_MOD.match(line)
         if m:
-            parent = containers[-1][2] if containers else ""
+            parent = containers[-1][2] if containers else parent_context
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             containers.append((depth, "module", qual))
@@ -1447,7 +1447,9 @@ def _scan_rust(text, lang, rel_path=None):
                 trailing = line[module_close + 1:]
                 if trailing.strip():
                     trailing = _split_rust_trailing_functions(trailing)
-                    trailing_scan = _scan_rust(trailing, lang, rel_path)
+                    trailing_scan = _scan_rust(
+                        trailing, lang, rel_path, parent_context=parent
+                    )
                     trailing_symbols.extend(
                         (idx, SymbolRec(
                             symbol.kind, symbol.name, symbol.qualname,
@@ -1466,7 +1468,7 @@ def _scan_rust(text, lang, rel_path=None):
             continue
         m = RE_RS_TYPE.match(line)
         if m:
-            parent = containers[-1][2] if containers else ""
+            parent = containers[-1][2] if containers else parent_context
             qual = f"{parent}.{m.group(2)}" if parent else \
                 (f"{module}.{m.group(2)}" if module else m.group(2))
             items.append((idx, depth, SymbolRec("type", m.group(2), qual, parent, idx, 0, "")))
@@ -1476,7 +1478,7 @@ def _scan_rust(text, lang, rel_path=None):
             continue
         m = RE_RS_TRAIT.match(line)
         if m:
-            parent = containers[-1][2] if containers else ""
+            parent = containers[-1][2] if containers else parent_context
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             containers.append((depth, "trait", qual))
@@ -1488,7 +1490,7 @@ def _scan_rust(text, lang, rel_path=None):
             continue
         m = RE_RS_IMPL.match(line)
         if m:
-            parent = containers[-1][2] if containers else ""
+            parent = containers[-1][2] if containers else parent_context
             target = RE_RS_IMPL_FOR.search(line, m.end())
             if target:
                 owner_text = _rust_impl_target(line, target.end())
@@ -1505,7 +1507,7 @@ def _scan_rust(text, lang, rel_path=None):
             continue
         m = RE_RS_FN.match(line)
         if m:
-            parent = containers[-1][2] if containers else ""
+            parent = containers[-1][2] if containers else parent_context
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             kind = "method" if containers and containers[-1][1] in ("impl", "trait") \

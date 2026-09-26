@@ -611,6 +611,23 @@ class QuickGoJavaRustTest(unittest.TestCase):
             },
         )
 
+    def test_rust_trailing_function_keeps_enclosing_module_scope(self):
+        scan = quick.quick_scan(
+            "mod outer {\n"
+            "    mod inner { fn f() {} } fn g() { done(); }\n"
+            "}\n",
+            "rust",
+            "lib.rs",
+        )
+
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertIn("lib.outer.inner.f", by_q)
+        self.assertEqual(by_q["lib.outer.g"].parent, "lib.outer")
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("lib.outer.g", "done")},
+        )
+
     def test_rust_explicit_module_paths_are_calls(self):
         src = (
             "mod util { pub fn helper() {} }\n"
