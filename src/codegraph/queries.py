@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from functools import wraps
 
 from .store import IndexStore
@@ -105,15 +106,28 @@ def query_deps(store: IndexStore, module: str, limit: int = 200):
     if limit < 0:
         raise ValueError("limit must be non-negative")
     files = _resolve_module_files(store, module)
-    if not files:
+    if not files or limit == 0:
         return []
-    placeholders = ", ".join("?" for _ in files)
-    rows = store.conn.execute(
-        "SELECT i.module, i.names, i.kind, i.line, f.path AS target_path "
-        "FROM imports i LEFT JOIN files f ON f.id = i.target_id "
-        f"WHERE i.file_id IN ({placeholders}) ORDER BY i.file_id, i.line LIMIT ?",
-        [file["id"] for file in files] + [limit],
-    )
+    variable_limit = 999
+    limit_id = getattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER", None)
+    if hasattr(store.conn, "getlimit") and limit_id is not None:
+        variable_limit = store.conn.getlimit(limit_id)
+    chunk_size = max(1, variable_limit - 1)
+    file_ids = [file["id"] for file in files]
+    rows = []
+    for start in range(0, len(file_ids), chunk_size):
+        remaining = limit - len(rows)
+        if remaining == 0:
+            break
+        chunk = file_ids[start:start + chunk_size]
+        placeholders = ", ".join("?" for _ in chunk)
+        rows.extend(store.conn.execute(
+            "SELECT i.module, i.names, i.kind, i.line, f.path AS target_path "
+            "FROM imports i LEFT JOIN files f ON f.id = i.target_id "
+            f"WHERE i.file_id IN ({placeholders}) "
+            "ORDER BY i.file_id, i.line LIMIT ?",
+            chunk + [remaining],
+        ))
     return [{"module": r["module"], "kind": r["kind"],
              "target_path": r["target_path"] or "", "line": r["line"]} for r in rows]
 

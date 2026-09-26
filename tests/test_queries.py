@@ -1,6 +1,7 @@
 """Tests for the read-side query API (queries)."""
 
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -110,6 +111,43 @@ class QueryTest(unittest.TestCase):
                 rows = query_deps(store, "p")
                 self.assertEqual(
                     {row["module"] for row in rows}, {"fmt", "os"})
+            finally:
+                store.close()
+
+    def test_deps_chunks_large_package_with_sqlite_variable_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = IndexStore(str(Path(tmp) / "large.sqlite"))
+            try:
+                count = 1000
+                store.conn.executemany(
+                    "INSERT INTO files(path, lang, module) VALUES (?, ?, ?)",
+                    [
+                        (f"pkg/file{i:04}.go", "go", "p")
+                        for i in range(count)
+                    ],
+                )
+                file_ids = [
+                    row["id"] for row in store.conn.execute(
+                        "SELECT id FROM files ORDER BY id"
+                    )
+                ]
+                store.conn.executemany(
+                    "INSERT INTO imports(file_id, module, kind, line) "
+                    "VALUES (?, ?, ?, ?)",
+                    [(file_id, f"dep{i}", "import", 1)
+                     for i, file_id in enumerate(file_ids)],
+                )
+                limit_id = getattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER", None)
+                if hasattr(store.conn, "setlimit") and limit_id is not None:
+                    store.conn.setlimit(limit_id, 999)
+
+                rows = query_deps(store, "p", limit=count)
+
+                self.assertEqual(len(rows), count)
+                self.assertEqual(
+                    {row["module"] for row in rows},
+                    {f"dep{i}" for i in range(count)},
+                )
             finally:
                 store.close()
 
