@@ -1356,6 +1356,35 @@ def _imports_rust(text):
     return imports
 
 
+def _split_rust_trailing_functions(text):
+    fragments = []
+    position = 0
+    while True:
+        while position < len(text) and text[position].isspace():
+            position += 1
+        if position == len(text):
+            break
+        function = RE_RS_INLINE_FN.match(text, position)
+        if function is None:
+            return text
+        opening = text.find("{", function.end())
+        if opening < 0:
+            return text
+        depth = 1
+        closing = opening + 1
+        while closing < len(text) and depth:
+            if text[closing] == "{":
+                depth += 1
+            elif text[closing] == "}":
+                depth -= 1
+            closing += 1
+        if depth:
+            return text
+        fragments.append(text[position:closing])
+        position = closing
+    return "\n".join(fragments) if len(fragments) > 1 else text
+
+
 def _scan_rust(text, lang, rel_path=None):
     module = languages.module_of(rel_path, lang) if rel_path else ""
     lines = _rust_mask_comments(text).splitlines()
@@ -1417,6 +1446,7 @@ def _scan_rust(text, lang, rel_path=None):
                     )
                 trailing = line[module_close + 1:]
                 if trailing.strip():
+                    trailing = _split_rust_trailing_functions(trailing)
                     trailing_scan = _scan_rust(trailing, lang, rel_path)
                     trailing_symbols.extend(
                         (idx, SymbolRec(
