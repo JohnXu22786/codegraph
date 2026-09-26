@@ -469,6 +469,27 @@ class QuickGoJavaRustTest(unittest.TestCase):
             [("example.com/acme/helper", "module")],
         )
 
+    def test_go_import_alias_bindings_are_recorded(self):
+        src = (
+            "package main\n"
+            'import h "example.com/acme/helper"\n'
+            "import (\n"
+            '    o "example.com/acme/other"\n'
+            '    "fmt"\n'
+            ")\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.names) for imp in scan.imports],
+            [
+                ("example.com/acme/helper", ["example.com/acme/helper as h"]),
+                ("example.com/acme/other", ["example.com/acme/other as o"]),
+                ("fmt", []),
+            ],
+        )
+
     def test_go_method_and_interface(self):
         src = (
             "package svc\n\n"

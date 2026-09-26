@@ -93,6 +93,11 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     ).fetchone()
     if row:
         return row["id"]
+    alias_target = _go_alias_symbol(
+        store, file_id, callee_text, blocked_file_ids
+    )
+    if alias_target is not None:
+        return alias_target
     if file["lang"] == "rust" and file["module"] and "::" in callee_text:
         qualname = _rust_inline_qualname(
             store, file_id, callee_text, caller_name
@@ -271,6 +276,8 @@ def _imported_files(store: IndexStore, file_id: int):
                     )
         if file["lang"] == "python" and imp["kind"] == "module":
             continue
+        if file["lang"] == "go":
+            continue
         for nm in _names_of(imp):
             if file["lang"] == "python":
                 alias = _split_import_alias(nm)
@@ -315,6 +322,64 @@ def _names_of(imp) -> list:
 def _split_import_alias(binding: str):
     parts = re.split(r"\s+as\s+", binding.strip(), maxsplit=1)
     return parts if len(parts) == 2 else None
+
+
+def _go_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
+                     blocked_file_ids=()):
+    file = store.file_by_id(file_id)
+    if file is None or file["lang"] != "go":
+        return None
+    package_alias, separator, member_path = callee_text.partition(".")
+    if not separator or not package_alias or not member_path:
+        return None
+
+    blocked_file_ids = set(blocked_file_ids)
+    for imp in store.imports_for_file(file_id):
+        if imp["kind"] != "module" or not imp["target_id"]:
+            continue
+        for binding in _names_of(imp):
+            alias = _split_import_alias(binding)
+            if alias is None:
+                continue
+            source_module, local_alias = alias
+            if local_alias != package_alias or source_module != imp["module"]:
+                continue
+            target = store.file_by_id(imp["target_id"])
+            if target is None or target["lang"] != "go":
+                continue
+            package_files = [
+                package_file_id
+                for package_file_id, _ in _go_package_files(
+                    store, Path(target["path"]).parent
+                )
+                if package_file_id not in blocked_file_ids
+            ]
+            if not package_files:
+                continue
+            placeholders = ",".join("?" for _ in package_files)
+            members = member_path.split(".")
+            rows = store.conn.execute(
+                "SELECT id, qualname FROM symbols "
+                f"WHERE file_id IN ({placeholders}) AND name = ? ORDER BY id",
+                (*package_files, members[0]),
+            ).fetchall()
+            if len(rows) != 1:
+                continue
+            symbol = rows[0]
+            for member in members[1:]:
+                rows = store.conn.execute(
+                    "SELECT id, qualname FROM symbols "
+                    f"WHERE file_id IN ({placeholders}) AND parent = ? "
+                    "AND name = ? ORDER BY id",
+                    (*package_files, symbol["qualname"], member),
+                ).fetchall()
+                if len(rows) != 1:
+                    symbol = None
+                    break
+                symbol = rows[0]
+            if symbol is not None:
+                return symbol["id"]
+    return None
 
 
 def _rust_inline_qualname(store: IndexStore, file_id: int, callee_text: str,

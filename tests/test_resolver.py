@@ -772,8 +772,15 @@ class ResolverTest(unittest.TestCase):
                 (root / package / f"{package}.go").write_text(
                     f"package {package}\nfunc Greet() {{}}\n", encoding="utf-8")
             (root / "main.go").write_text(
-                'package main\nimport h "example.com/acme/helper"\n'
-                "func main() { h.Greet() }\n", encoding="utf-8")
+                "package main\n"
+                "import (\n"
+                '    h "example.com/acme/helper"\n'
+                '    o "example.com/acme/other"\n'
+                ")\n"
+                "func Greet() {}\n"
+                "func main() { h.Greet(); o.Greet() }\n",
+                encoding="utf-8",
+            )
 
             cfg = load_config(root=str(root))
             cfg.engine = "quick"
@@ -781,12 +788,26 @@ class ResolverTest(unittest.TestCase):
             store = IndexStore(str(cfg.db_path))
             try:
                 main_id = store.file_by_path("main.go")["id"]
-                target_id = resolve_callee(store, main_id, "h.Greet")
-                self.assertIsNotNone(target_id)
-                target = store.symbol_by_id(target_id)
-                self.assertEqual(target.name, "Greet")
-                self.assertEqual(store.file_by_id(target.file_id)["path"],
-                                 "helper/helper.go")
+                call_targets = {
+                    row["callee"]: row["callee_id"]
+                    for row in store.conn.execute(
+                        "SELECT callee, callee_id FROM calls WHERE file_id = ?",
+                        (main_id,),
+                    )
+                }
+                for callee, expected_path in (
+                    ("h.Greet", "helper/helper.go"),
+                    ("o.Greet", "other/other.go"),
+                ):
+                    target_id = resolve_callee(store, main_id, callee)
+                    self.assertIsNotNone(target_id)
+                    self.assertEqual(call_targets[callee], target_id)
+                    target = store.symbol_by_id(target_id)
+                    self.assertEqual(target["name"], "Greet")
+                    self.assertEqual(
+                        store.file_by_id(target["file_id"])["path"],
+                        expected_path,
+                    )
             finally:
                 store.close()
 
