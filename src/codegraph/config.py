@@ -108,6 +108,12 @@ def load_config(root=None, config_path=None) -> ProjectConfig:
     if os.environ.get(ENV_PREFIX + "ENGINE"):
         cfg.engine = os.environ[ENV_PREFIX + "ENGINE"]
 
+    if isinstance(cfg.max_file_kb, bool) or not isinstance(cfg.max_file_kb, int):
+        raise ValueError(
+            'config field "max_file_kb" must be an integer, got '
+            f'{cfg.max_file_kb!r}'
+        )
+
     # relative paths are anchored at the project root
     db = Path(cfg.db_path)
     if not db.is_absolute():
