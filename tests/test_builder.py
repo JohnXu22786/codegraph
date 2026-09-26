@@ -121,6 +121,72 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(report.files_skipped, ALL_FILES)
         resolve.assert_called_once()
 
+    def test_scanner_and_resolver_version_changes_rebuild_stale_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.ts").write_text(
+                'import { make } from "./util";\n'
+                "function caller() { make(); }\n",
+                encoding="utf-8",
+            )
+            util = root / "util"
+            util.mkdir()
+            (util / "index.d.ts").write_text(
+                "export declare function make(): void;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.ts")["id"]
+                declaration_id = store.file_by_path("util/index.d.ts")["id"]
+                store.conn.execute(
+                    "UPDATE imports SET target_id = NULL WHERE file_id = ?",
+                    (app_id,),
+                )
+                store.conn.execute(
+                    "UPDATE calls SET callee_id = NULL WHERE file_id = ?",
+                    (app_id,),
+                )
+                stale_symbol = store.conn.execute(
+                    "SELECT id FROM symbols WHERE file_id = ? AND name = 'make'",
+                    (declaration_id,),
+                ).fetchone()
+                store.conn.execute(
+                    "DELETE FROM sym_fts WHERE rowid = ?", (stale_symbol["id"],)
+                )
+                store.conn.execute(
+                    "DELETE FROM symbols WHERE id = ?", (stale_symbol["id"],)
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config.pop("scanner_version")
+                scan_config["resolver_version"] = 6
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+
+            self.assertEqual(report.files_changed, 2)
+            self.assertEqual(report.files_skipped, 0)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.ts")["id"]
+                import_row = store.imports_for_file(app_id)[0]
+                call_row = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ?", (app_id,)
+                ).fetchone()
+                self.assertIsNotNone(import_row["target_id"])
+                self.assertIsNotNone(call_row["callee_id"])
+                self.assertEqual(
+                    store.symbol_by_id(call_row["callee_id"])["name"], "make"
+                )
+            finally:
+                store.close()
+
     def test_resolver_version_change_re_resolves_stale_absolute_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
