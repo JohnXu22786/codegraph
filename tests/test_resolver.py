@@ -114,6 +114,61 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_python_tab_separated_aliases_resolve_across_engines(self):
+        cases = (
+            {
+                "statement": "from pkg.pricing import price\tas\tp\n",
+                "body": "def caller():\n    return p()\n",
+                "call": "p",
+                "target": "pkg.pricing.price",
+                "other_path": "other.py",
+                "other_source": "def p():\n    return 2\n",
+            },
+            {
+                "statement": "from pkg import pricing\tas\tp\n",
+                "body": "def caller():\n    return p.price()\n",
+                "call": "p.price",
+                "target": "pkg.pricing.price",
+                "other_path": "other/pricing.py",
+                "other_source": "def price():\n    return 2\n",
+            },
+        )
+        for engine in ("quick", "deep", "auto"):
+            for case in cases:
+                with self.subTest(engine=engine, call=case["call"]):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        root = Path(tmp)
+                        package = root / "pkg"
+                        package.mkdir()
+                        (package / "__init__.py").write_text(
+                            "", encoding="utf-8")
+                        (package / "pricing.py").write_text(
+                            "def price():\n    return 1\n", encoding="utf-8")
+                        other = root / case["other_path"]
+                        other.parent.mkdir(parents=True, exist_ok=True)
+                        other.write_text(case["other_source"], encoding="utf-8")
+                        (root / "app.py").write_text(
+                            case["statement"] + case["body"],
+                            encoding="utf-8",
+                        )
+
+                        cfg = load_config(root=str(root))
+                        cfg.engine = engine
+                        build_index(cfg)
+                        store = IndexStore(str(cfg.db_path))
+                        try:
+                            app_id = store.file_by_path("app.py")["id"]
+                            target_id = resolve_callee(
+                                store, app_id, case["call"]
+                            )
+                            self.assertIsNotNone(target_id)
+                            self.assertEqual(
+                                store.symbol_by_id(target_id)["qualname"],
+                                case["target"],
+                            )
+                        finally:
+                            store.close()
+
     def test_absolute_python_import_falls_back_to_source_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
