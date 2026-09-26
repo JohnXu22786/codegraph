@@ -133,7 +133,11 @@ def run_stdio(input_stream, output_stream, log_stream, cfg):
             _log(log_stream, f"invalid JSON-RPC message: {exc}")
             _send(output_stream, _error(None, -32700, "Parse error"))
             continue
-        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+        if (
+            not isinstance(msg, dict)
+            or msg.get("jsonrpc") != "2.0"
+            or not isinstance(msg.get("method"), str)
+        ):
             msg_id = msg.get("id") if isinstance(msg, dict) else None
             _send(output_stream, _error(msg_id, -32600, "Invalid Request"))
             continue
