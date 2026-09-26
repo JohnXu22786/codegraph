@@ -49,6 +49,36 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(cid)
         self.assertEqual(self.store.symbol_by_id(cid).qualname, "pkg.cart.create_cart")
 
+    def test_python_aliased_submodule_call_with_duplicate_symbol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for package in ("pkg", "other"):
+                (root / package).mkdir()
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "pkg" / "pricing.py").write_text(
+                "def price(x):\n    return x\n", encoding="utf-8")
+            (root / "other" / "pricing.py").write_text(
+                "def price(x):\n    return x\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "from pkg import pricing as p\n"
+                "def total(x):\n    return p.price(x)\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.py")["id"]
+                target_id = resolve_callee(store, app_id, "p.price")
+                self.assertIsNotNone(target_id)
+                self.assertEqual(
+                    store.symbol_by_id(target_id).qualname, "pkg.pricing.price"
+                )
+            finally:
+                store.close()
+
     def test_absolute_python_import_falls_back_to_source_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
