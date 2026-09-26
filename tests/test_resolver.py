@@ -79,6 +79,41 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_python_imported_symbol_alias_resolves_with_duplicate_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "pkg"
+            package.mkdir()
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "pricing.py").write_text(
+                "def price():\n    return 1\n", encoding="utf-8")
+            (root / "other.py").write_text(
+                "def price():\n    return 2\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "from pkg.pricing import price as p\n"
+                "def caller():\n    return p()\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.py")["id"]
+                target_id = resolve_callee(store, app_id, "p")
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(target.name, "price")
+                self.assertEqual(
+                    store.file_by_id(target.file_id)["path"], "pkg/pricing.py"
+                )
+                call = store.find_call(callee="p", file_id=app_id)
+                self.assertIsNotNone(call)
+                self.assertEqual(call["callee_id"], target_id)
+            finally:
+                store.close()
+
     def test_absolute_python_import_falls_back_to_source_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
