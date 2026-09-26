@@ -433,6 +433,11 @@ class _Walker:
                 imp.line = node.start_point[0] + 1
                 self.imports.append(imp)
             return
+        if head == "import" and self.lang in ("javascript", "typescript"):
+            for imp in _imports_javascript(text):
+                imp.line = node.start_point[0] + 1
+                self.imports.append(imp)
+            return
         if head in _EXCLUDE[self.lang]:
             return
         self.raw_calls.append((callee, node.start_point[0] + 1))
