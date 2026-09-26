@@ -72,7 +72,7 @@ def _root_of(store: IndexStore) -> Path:
 
 
 def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
-                   blocked_file_ids=()):
+                   blocked_file_ids=(), caller_name=None):
     """Return the symbol id a call target refers to, or None.
 
     ``blocked_file_ids`` prevents fallback to symbols in import targets that
@@ -97,7 +97,16 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
         parts = callee_text.split("::")
         if parts[0] not in ("crate", "self", "super"):
             # Inline Rust module qualnames include the file module and use dots.
-            qualname = f"{file['module']}.{'.'.join(parts)}"
+            scope = file["module"]
+            if caller_name:
+                caller = store.conn.execute(
+                    "SELECT parent FROM symbols WHERE file_id = ? AND qualname = ? "
+                    "ORDER BY id LIMIT 1",
+                    (file_id, caller_name),
+                ).fetchone()
+                if caller and caller["parent"]:
+                    scope = caller["parent"]
+            qualname = f"{scope}.{'.'.join(parts)}"
             row = store.conn.execute(
                 "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
                 "ORDER BY id LIMIT 1",
@@ -1450,6 +1459,7 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
                 row["file_id"],
                 row["callee"],
                 blocked_file_ids=blocked_import_files.get(row["file_id"], ()),
+                caller_name=row["caller_name"],
             )
             store.conn.execute(
                 "UPDATE calls SET caller_id = ?, callee_id = ? WHERE id = ?",

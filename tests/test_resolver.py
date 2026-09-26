@@ -694,6 +694,39 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_nested_inline_call_uses_caller_module_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.rs").write_text(
+                "mod outer {\n"
+                "    mod util { pub fn helper() {} }\n"
+                "    fn helper() {}\n"
+                "    fn caller() { util::helper(); }\n"
+                "}\n"
+                "fn helper() {}\n",
+                encoding="utf-8",
+            )
+            (root / "other.rs").write_text(
+                "fn helper() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                helper = store.symbol_by_qualname("lib.outer.util.helper")
+                self.assertIsNotNone(helper)
+                file_id = store.file_by_path("lib.rs")["id"]
+                edge = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ? "
+                    "AND callee = ?",
+                    (file_id, "util::helper"),
+                ).fetchone()
+                self.assertIsNotNone(edge)
+                self.assertEqual(edge["callee_id"], helper["id"])
+            finally:
+                store.close()
+
     def test_rust_mod_and_path_calls(self):
         rid = self._callee("rustx/main.rs", "lib::dist")
         self.assertIsNotNone(rid)
