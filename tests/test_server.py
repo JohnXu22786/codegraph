@@ -218,6 +218,7 @@ class McpServerTest(unittest.TestCase):
             return_value=SimpleNamespace(
                 files_scanned=0, files_changed=0, files_skipped=0,
                 files_removed=0, symbols=0, calls=0, imports=0,
+                complete=True,
             ),
         ) as build_index:
             replies = self._run(valid)
@@ -226,6 +227,24 @@ class McpServerTest(unittest.TestCase):
         forwarded = [call.kwargs["force"] for call in build_index.call_args_list]
         self.assertEqual(forwarded, [False, True])
         self.assertTrue(all(type(force) is bool for force in forwarded))
+
+    def test_incomplete_forced_reindex_is_reported_as_error(self):
+        with patch(
+            "codegraph.server.handlers.build_index",
+            return_value=SimpleNamespace(complete=False),
+        ) as build_index:
+            replies = self._run([
+                self._msg(1, "tools/call", {
+                    "name": "reindex", "arguments": {"force": True}
+                })
+            ])
+
+        result = replies[0]["result"]
+        self.assertTrue(result["isError"])
+        self.assertIn(
+            "forced index rebuild incomplete", result["content"][0]["text"]
+        )
+        build_index.assert_called_once()
 
     def test_omitted_arguments_default_to_empty_object(self):
         replies = self._run([

@@ -147,6 +147,10 @@ def _exec_reindex(args, ctx: ToolContext):
         raise ToolError("force must be a boolean")
     try:
         report = build_index(ctx.cfg, force=force, quiet=True)
+        if force and not report.complete:
+            raise ToolError(
+                "forced index rebuild incomplete; previous index was preserved"
+            )
     finally:
         # Incremental builds commit changed files as they go, so a later
         # failure can still leave the index changed and cached reads stale.
