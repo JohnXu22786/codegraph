@@ -67,6 +67,79 @@ class LoadConfigTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "must contain a JSON object"):
                     load_config(root=str(self.root))
 
+    def test_root_must_be_a_string(self):
+        config_path = self.root / "codegraph.json"
+        for value in (None, [], 0, False):
+            with self.subTest(value=value):
+                config_path.write_text(
+                    json.dumps({"root": value}), encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, '"root" must be a string'):
+                    with mock.patch.dict(os.environ, {"CODEGRAPH_ROOT": ""}):
+                        load_config(config_path=str(config_path))
+
+    def test_scoped_root_ignores_invalid_file_root(self):
+        config_path = self.root / "codegraph.json"
+        config_path.write_text(json.dumps({"root": None}), encoding="utf-8")
+
+        explicit = load_config(root=str(self.root))
+        self.assertEqual(explicit.root, str(self.root.resolve()))
+
+        with mock.patch.dict(os.environ, {"CODEGRAPH_ROOT": str(self.root)}):
+            environment = load_config()
+        self.assertEqual(environment.root, str(self.root.resolve()))
+
+    def test_db_path_must_be_a_string(self):
+        config_path = self.root / "codegraph.json"
+        for value in (None, [], 0, False):
+            with self.subTest(value=value):
+                config_path.write_text(
+                    json.dumps({"db_path": value}), encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    ValueError, '"db_path" must be a string'
+                ):
+                    with mock.patch.dict(os.environ, {"CODEGRAPH_DB": ""}):
+                        load_config(root=str(self.root))
+
+    def test_env_db_overrides_invalid_file_value(self):
+        (self.root / "codegraph.json").write_text(
+            json.dumps({"db_path": None}), encoding="utf-8",
+        )
+        db_path = self.root / "override.sqlite"
+        with mock.patch.dict(os.environ, {"CODEGRAPH_DB": str(db_path)}):
+            cfg = load_config(root=str(self.root))
+        self.assertEqual(cfg.db_path, str(db_path.resolve()))
+
+    def test_explicit_db_path_overrides_invalid_file_value(self):
+        (self.root / "codegraph.json").write_text(
+            json.dumps({"db_path": None}), encoding="utf-8",
+        )
+        db_path = self.root / "override.sqlite"
+        with mock.patch.dict(os.environ, {"CODEGRAPH_DB": ""}):
+            cfg = load_config(root=str(self.root), db_path=str(db_path))
+        self.assertEqual(cfg.db_path, str(db_path.resolve()))
+
+    def test_language_map_must_map_strings_to_strings(self):
+        config_path = self.root / "codegraph.json"
+        for value in (None, [], 0, False):
+            with self.subTest(value=value):
+                config_path.write_text(
+                    json.dumps({"language_map": value}), encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    ValueError, '"language_map" must be an object'
+                ):
+                    load_config(root=str(self.root))
+
+        config_path.write_text(
+            json.dumps({"language_map": {".x": []}}), encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            ValueError, '"language_map" must map strings to strings'
+        ):
+            load_config(root=str(self.root))
+
     def test_incremental_false_is_preserved(self):
         (self.root / "codegraph.json").write_text(
             json.dumps({"incremental": False}), encoding="utf-8",
