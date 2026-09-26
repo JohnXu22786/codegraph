@@ -44,7 +44,7 @@ def _error(msg_id, code: int, message: str) -> dict:
 def _dispatch(msg: dict, ctx: ToolContext, log_stream) -> "dict | None":
     msg_id = msg.get("id")
     method = msg.get("method")
-    params = msg.get("params") or {}
+    params = msg.get("params", {})
     if not isinstance(params, dict):
         return _error(msg_id, -32602, "Invalid params: expected an object")
 

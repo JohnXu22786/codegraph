@@ -168,8 +168,24 @@ class McpServerTest(unittest.TestCase):
         self.assertEqual(json.loads(lines[1])["result"]["tools"][0]["name"], "callers")
 
     def test_ping(self):
-        replies = self._run([self._msg(1, "ping")])
+        replies = self._run([{"jsonrpc": "2.0", "id": 1, "method": "ping"}])
         self.assertEqual(replies[0]["result"], {})
+
+    def test_explicit_falsey_non_object_params_are_invalid(self):
+        malformed = (None, [], "", 0, False)
+        messages = [
+            {"jsonrpc": "2.0", "id": i, "method": "ping", "params": params}
+            for i, params in enumerate(malformed, start=1)
+        ]
+
+        replies = self._run(messages)
+
+        self.assertEqual(len(replies), len(malformed))
+        for reply in replies:
+            self.assertEqual(reply["error"]["code"], -32602)
+            self.assertEqual(
+                reply["error"]["message"], "Invalid params: expected an object"
+            )
 
     def test_missing_jsonrpc_version_returns_invalid_request(self):
         replies = self._run([{"id": 1, "method": "ping"}])
