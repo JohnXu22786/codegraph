@@ -38,6 +38,7 @@ _TS_RUNTIME_EXTENSION_SUBSTITUTIONS = {
     ".mjs": (".mts", ".d.mts", ".mjs"),
     ".cjs": (".cts", ".d.cts", ".cjs"),
 }
+_TS_DECLARATION_EXTS = [".d.ts", ".d.mts", ".d.cts"]
 
 # JavaScript / TypeScript relative imports may use either ecosystem's
 # extensions (require("./util.js") can resolve to util.ts), but must not
@@ -1118,9 +1119,10 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
         # JS and TS can resolve each other's extensions, but never unrelated
         # language files. Rust retains its broader legacy fallback behavior.
         fallback_exts = _JS_TS_EXTS if lang in ("javascript", "typescript") else _ALL_EXTS
-        ordered = _EXT_BY_LANG[lang] + [
-            e for e in fallback_exts if e not in _EXT_BY_LANG[lang]
-        ]
+        ordered = _EXT_BY_LANG[lang] + (
+            _TS_DECLARATION_EXTS if lang == "typescript" else []
+        )
+        ordered += [e for e in fallback_exts if e not in ordered]
         candidates.extend(target.with_suffix(ext) for ext in ordered)
         if lang in ("javascript", "typescript") and not target.suffix:
             candidates.extend(target / f"index{ext}" for ext in ordered)

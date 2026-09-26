@@ -220,6 +220,30 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_ts_directory_import_resolves_declaration_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.ts").write_text(
+                'import { value } from "./util";\n', encoding="utf-8")
+            util = root / "util"
+            util.mkdir()
+            (util / "index.d.ts").write_text(
+                "export declare const value: number;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.ts")["id"]
+                target_id = resolve_module(store, app_id, "./util")
+                self.assertIsNotNone(target_id)
+                self.assertEqual(
+                    store.file_by_id(target_id)["path"], "util/index.d.ts"
+                )
+            finally:
+                store.close()
+
     def test_typescript_runtime_specifiers_prefer_source_extensions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
