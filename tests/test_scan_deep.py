@@ -131,6 +131,19 @@ class DeepJavascriptTest(unittest.TestCase):
             [("./lazy.js", "require", 1)],
         )
 
+    def test_commonjs_alias_binding_is_preserved(self):
+        src = (
+            "const { foo: bar } = require('./util.js');\n"
+            "function caller() { return bar(); }\n"
+        )
+
+        scan = deep.deep_scan(src, "javascript", "app.js")
+
+        self.assertEqual(
+            [(imp.module, imp.names, imp.kind) for imp in scan.imports],
+            [("./util.js", ["foo as bar"], "require")],
+        )
+
 
 @unittest.skipUnless(
     deep.supports("typescript"), "tree-sitter TypeScript grammar not installed"
