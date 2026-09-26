@@ -297,6 +297,20 @@ class QuickJavascriptTest(unittest.TestCase):
 
         self.assertEqual(scan.imports[0].names, ["foo as bar"])
 
+    def test_esm_namespace_import_preserves_alias_binding(self):
+        cases = (
+            ("import * as ns from './lib.js';\n", ["* as ns"]),
+            (
+                "import primary, * as ns from './lib.js';\n",
+                ["default as primary", "* as ns"],
+            ),
+        )
+        for lang in ("javascript", "typescript"):
+            for source, expected in cases:
+                with self.subTest(lang=lang, source=source):
+                    scan = quick.quick_scan(source, lang, f"app.{lang}")
+                    self.assertEqual(scan.imports[0].names, expected)
+
     def test_dynamic_import_is_a_module_dependency(self):
         src = (
             "async function load() {\n"

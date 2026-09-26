@@ -483,6 +483,48 @@ class ResolverTest(unittest.TestCase):
                 finally:
                     store.close()
 
+    def test_javascript_namespace_import_resolves_own_module_exports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "one").mkdir()
+            (root / "two").mkdir()
+            (root / "app.js").write_text(
+                'import * as ns from "./one/index.js";\n'
+                'import { foo as namedFoo } from "./two/index.js";\n'
+                "function caller() { ns.foo(); namedFoo(); }\n",
+                encoding="utf-8",
+            )
+            (root / "one/index.js").write_text(
+                "export function foo() { return 1; }\n", encoding="utf-8")
+            (root / "two/index.js").write_text(
+                "export function foo() { return 2; }\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.js")["id"]
+                rows = {
+                    row["callee"]: row["callee_id"]
+                    for row in store.conn.execute(
+                        "SELECT callee, callee_id FROM calls WHERE file_id = ?",
+                        (file_id,),
+                    )
+                }
+                namespace_target = store.symbol_by_id(rows["ns.foo"])
+                named_target = store.symbol_by_id(rows["namedFoo"])
+                self.assertEqual(
+                    store.file_by_id(namespace_target["file_id"])["path"],
+                    "one/index.js",
+                )
+                self.assertEqual(
+                    store.file_by_id(named_target["file_id"])["path"],
+                    "two/index.js",
+                )
+            finally:
+                store.close()
+
     def test_aliased_class_member_calls_resolve_with_duplicate_members(self):
         cases = (
             {
