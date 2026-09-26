@@ -458,6 +458,24 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertIn(("lib.util.internal", "helper"), calls)
         self.assertIn(("lib.caller", "util::helper"), calls)
 
+    def test_rust_single_line_inline_module_scopes_function_and_calls(self):
+        src = (
+            "mod util { pub fn helper() { dependency(); } }\n"
+            "fn caller() { util::helper(); }\n"
+        )
+
+        scan = quick.quick_scan(src, "rust", "lib.rs")
+
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["lib.util.helper"].parent, "lib.util")
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {
+                ("lib.util.helper", "dependency"),
+                ("lib.caller", "util::helper"),
+            },
+        )
+
     def test_rust_trait(self):
         src = (
             "pub trait Shape {\n"
