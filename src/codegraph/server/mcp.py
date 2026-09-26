@@ -49,7 +49,30 @@ def _dispatch(msg: dict, ctx: ToolContext, log_stream) -> "dict | None":
         return _error(msg_id, -32602, "Invalid params: expected an object")
 
     if method == "initialize":
-        requested = params.get("protocolVersion", "")
+        requested = params.get("protocolVersion")
+        if not isinstance(requested, str):
+            return _error(
+                msg_id, -32602,
+                "Invalid params: protocolVersion must be a string",
+            )
+        if not isinstance(params.get("capabilities"), dict):
+            return _error(
+                msg_id, -32602,
+                "Invalid params: capabilities must be an object",
+            )
+        client_info = params.get("clientInfo")
+        if not isinstance(client_info, dict):
+            return _error(
+                msg_id, -32602,
+                "Invalid params: clientInfo must be an object",
+            )
+        if not isinstance(client_info.get("name"), str) or not isinstance(
+            client_info.get("version"), str
+        ):
+            return _error(
+                msg_id, -32602,
+                "Invalid params: clientInfo requires string name and version",
+            )
         version = requested if requested in SUPPORTED_VERSIONS else DEFAULT_VERSION
         return {"jsonrpc": "2.0", "id": msg_id, "result": {
             "protocolVersion": version,

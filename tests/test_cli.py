@@ -100,7 +100,7 @@ class CliSmokeTest(unittest.TestCase):
         init = json.dumps({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2024-11-05", "capabilities": {},
-                       "clientInfo": {"name": "smoke"}},
+                       "clientInfo": {"name": "smoke", "version": "1"}},
         })
         call = json.dumps({
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",

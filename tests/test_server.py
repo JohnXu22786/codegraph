@@ -48,7 +48,8 @@ class McpServerTest(unittest.TestCase):
         replies = self._run(
             [
                 self._msg(1, "initialize", {"protocolVersion": "2024-11-05",
-                                            "capabilities": {}, "clientInfo": {"name": "t"}}),
+                                            "capabilities": {}, "clientInfo": {
+                                                "name": "t", "version": "1"}}),
                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
                 self._msg(2, "tools/list"),
             ]
@@ -69,8 +70,54 @@ class McpServerTest(unittest.TestCase):
             self.assertEqual(t["inputSchema"]["type"], "object")
 
     def test_protocol_version_negotiation(self):
-        replies = self._run([self._msg(1, "initialize", {"protocolVersion": "2030-01-01"})])
+        replies = self._run([self._msg(1, "initialize", {
+            "protocolVersion": "2030-01-01",
+            "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "1"},
+        })])
         self.assertIn(replies[0]["result"]["protocolVersion"], ("2024-11-05", "2025-03-26"))
+
+    def test_initialize_requires_valid_parameters(self):
+        valid = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test-client", "version": "1"},
+        }
+        cases = [
+            ({"capabilities": {}, "clientInfo": valid["clientInfo"]},
+             "Invalid params: protocolVersion must be a string"),
+            ({**valid, "protocolVersion": []},
+             "Invalid params: protocolVersion must be a string"),
+            ({"protocolVersion": valid["protocolVersion"],
+              "clientInfo": valid["clientInfo"]},
+             "Invalid params: capabilities must be an object"),
+            ({**valid, "capabilities": []},
+             "Invalid params: capabilities must be an object"),
+            ({"protocolVersion": valid["protocolVersion"],
+              "capabilities": {}},
+             "Invalid params: clientInfo must be an object"),
+            ({**valid, "clientInfo": []},
+             "Invalid params: clientInfo must be an object"),
+            ({**valid, "clientInfo": {"name": "test-client"}},
+             "Invalid params: clientInfo requires string name and version"),
+            ({**valid, "clientInfo": {"name": "test-client", "version": []}},
+             "Invalid params: clientInfo requires string name and version"),
+            ({**valid, "clientInfo": {"version": "1"}},
+             "Invalid params: clientInfo requires string name and version"),
+            ({**valid, "clientInfo": {"name": [], "version": "1"}},
+             "Invalid params: clientInfo requires string name and version"),
+        ]
+        messages = [
+            self._msg(i, "initialize", params)
+            for i, (params, _) in enumerate(cases, start=1)
+        ]
+
+        replies = self._run(messages)
+
+        self.assertEqual(len(replies), len(cases))
+        for reply, (_, expected) in zip(replies, cases):
+            self.assertEqual(reply["error"]["code"], -32602)
+            self.assertEqual(reply["error"]["message"], expected)
 
     def test_callers_tool(self):
         replies = self._run([self._msg(1, "tools/call", {
