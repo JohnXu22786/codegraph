@@ -279,6 +279,28 @@ class DeepGoTest(unittest.TestCase):
             ],
         )
 
+    def test_grouped_imports_keep_spec_line_numbers(self):
+        from codegraph.scanner import quick
+
+        src = (
+            "package main\n"
+            "import (\n"
+            '    "example.com/acme/one"\n'
+            '    other "example.com/acme/two"\n'
+            ")\n"
+        )
+
+        quick_scan = quick.quick_scan(src, "go", "main.go")
+        deep_scan = deep.deep_scan(src, "go", "main.go")
+        expected = [("example.com/acme/one", 3), ("example.com/acme/two", 4)]
+
+        self.assertEqual(
+            [(imp.module, imp.line) for imp in quick_scan.imports], expected
+        )
+        self.assertEqual(
+            [(imp.module, imp.line) for imp in deep_scan.imports], expected
+        )
+
     def test_generic_calls_are_recorded(self):
         src = (
             "package demo\n"

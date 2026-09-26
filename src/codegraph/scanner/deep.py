@@ -359,7 +359,10 @@ class _Walker:
         if t in _IMPORTS[self.lang] and not inline_module:
             text = _node_text(node, self.source)
             for imp in _IMPORT_FNS[self.lang](text):
-                imp.line = node.start_point[0] + 1
+                if self.lang == "go":
+                    imp.line += node.start_point[0]
+                else:
+                    imp.line = node.start_point[0] + 1
                 self.imports.append(imp)
         for child in node.children:
             self.walk(child)

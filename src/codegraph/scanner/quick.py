@@ -1022,7 +1022,7 @@ def _imports_go(text):
             if module not in seen:
                 imports.append(_go_import_rec(
                     module, mm.group("alias"),
-                    _line_no(text, m.start() + mm.start()),
+                    _line_no(text, m.start(1) + mm.start()),
                 ))
                 seen.add(module)
     return imports
