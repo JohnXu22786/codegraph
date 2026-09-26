@@ -59,6 +59,41 @@ class LanguageRegistryTest(unittest.TestCase):
                 "/**\n * Calculator API.\n */\npackage com.example.calc;\n",
                 "com.example.calc",
             ),
+            (
+                "package-info.java",
+                "java",
+                "@Deprecated\npackage com.example.api;\n",
+                "com.example.api",
+            ),
+            (
+                "package-info.java",
+                "java",
+                "@org /* qualifier */ . example . Meta\n"
+                "package com.example.api;\n",
+                "com.example.api",
+            ),
+            (
+                "package-info.java",
+                "java",
+                '@SuppressWarnings("deprecation")\n'
+                '@org.example.Metadata(value = @Nested(" ) "))\n'
+                "package com.example.api;\n",
+                "com.example.api",
+            ),
+            (
+                "package-info.java",
+                "java",
+                '@Meta("""\nquote: \\"""\n) still text\n""")\n'
+                "package com.example.api;\n",
+                "com.example.api",
+            ),
+            (
+                "package-info.java",
+                "java",
+                '@Meta("""\nquote: \\""""\n)\n'
+                "package com.example.api;\n",
+                "com.example.api",
+            ),
             ("src/Calc.java", "java", "class Calc {}\n", "src/Calc"),
         )
         for rel_path, lang, text, expected in cases:

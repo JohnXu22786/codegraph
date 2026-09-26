@@ -36,7 +36,112 @@ _PKG_STMTS = {
 }
 
 
+def _skip_java_trivia(text, pos):
+    while pos < len(text):
+        if text[pos].isspace():
+            pos += 1
+        elif text.startswith("//", pos):
+            pos += 2
+            while pos < len(text) and text[pos] not in "\r\n":
+                pos += 1
+        elif text.startswith("/*", pos):
+            end = text.find("*/", pos + 2)
+            if end < 0:
+                return len(text)
+            pos = end + 2
+        else:
+            break
+    return pos
+
+
+def _skip_java_text_block(text, pos):
+    search = pos + 3
+    while True:
+        end = text.find('"""', search)
+        if end < 0:
+            return None
+        slash = end - 1
+        while slash >= pos + 3 and text[slash] == "\\":
+            slash -= 1
+        if (end - slash - 1) % 2 == 0:
+            return end + 3
+        search = end + 1
+
+
+def _skip_java_annotation_name(text, pos):
+    segment = re.match(r"[\w$]+", text[pos:])
+    if segment is None:
+        return None
+    pos += segment.end()
+    while True:
+        dot = _skip_java_trivia(text, pos)
+        if dot >= len(text) or text[dot] != ".":
+            return dot
+        pos = _skip_java_trivia(text, dot + 1)
+        segment = re.match(r"[\w$]+", text[pos:])
+        if segment is None:
+            return None
+        pos += segment.end()
+
+
+def _skip_java_annotation(text, pos):
+    pos = _skip_java_trivia(text, pos + 1)
+    pos = _skip_java_annotation_name(text, pos)
+    if pos is None:
+        return None
+    pos = _skip_java_trivia(text, pos)
+    if pos >= len(text) or text[pos] != "(":
+        return pos
+
+    depth = 1
+    pos += 1
+    quote = None
+    while pos < len(text):
+        if quote is not None:
+            if text[pos] == "\\":
+                pos += 2
+                continue
+            if text[pos] == quote:
+                quote = None
+        elif text.startswith("//", pos):
+            pos = _skip_java_trivia(text, pos)
+            continue
+        elif text.startswith("/*", pos):
+            pos = _skip_java_trivia(text, pos)
+            continue
+        elif text.startswith('"""', pos):
+            pos = _skip_java_text_block(text, pos)
+            if pos is None:
+                return None
+            continue
+        elif text[pos] in "\"'":
+            quote = text[pos]
+        elif text[pos] == "(":
+            depth += 1
+        elif text[pos] == ")":
+            depth -= 1
+            if depth == 0:
+                return pos + 1
+        pos += 1
+    return None
+
+
+def _declared_java_package(text):
+    pos = 0
+    while True:
+        pos = _skip_java_trivia(text, pos)
+        if pos >= len(text) or text[pos] != "@":
+            break
+        pos = _skip_java_annotation(text, pos)
+        if pos is None:
+            return ""
+    match = _PKG_STMTS["java"].match(text[pos:])
+    return match.group(1) if match else ""
+
+
 def _declared_package(lang, text):
+    if lang == "java":
+        return _declared_java_package(text)
     match = _PKG_STMTS[lang].search(text)
     return match.group(1) if match else ""
 
