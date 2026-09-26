@@ -139,6 +139,27 @@ class LoadConfigTest(unittest.TestCase):
             cfg = load_config(root=str(self.root))
         self.assertEqual(cfg.max_file_kb, 512)
 
+    def test_non_integer_max_file_kb_is_rejected(self):
+        config_path = self.root / "codegraph.json"
+        for value in ("512", 1.5, True, False, None, [], {}):
+            with self.subTest(value=value):
+                config_path.write_text(
+                    json.dumps({"max_file_kb": value}), encoding="utf-8",
+                )
+                with mock.patch.dict(os.environ, {"CODEGRAPH_MAX_FILE_KB": ""}):
+                    with self.assertRaisesRegex(
+                        ValueError, '"max_file_kb" must be an integer'
+                    ):
+                        load_config(root=str(self.root))
+
+    def test_env_max_file_kb_overrides_invalid_file_value(self):
+        (self.root / "codegraph.json").write_text(
+            json.dumps({"max_file_kb": "invalid"}), encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"CODEGRAPH_MAX_FILE_KB": "64"}):
+            cfg = load_config(root=str(self.root))
+        self.assertEqual(cfg.max_file_kb, 64)
+
     def test_relative_db_anchored_at_root(self):
         (self.root / "codegraph.json").write_text(
             json.dumps({"db_path": "idx/cg.sqlite"}), encoding="utf-8",
