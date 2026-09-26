@@ -423,6 +423,38 @@ class QueryTest(unittest.TestCase):
         self.assertEqual(stats["languages"]["typescript"], 3)
         self.assertIsNotNone(stats["last_indexed"])
 
+    def test_stats_uses_one_snapshot_during_concurrent_index_update(self):
+        expected = query_stats(self.store)
+        writer = IndexStore(self.store.db_path)
+        count_rows = self.store.count_rows
+        inserted = False
+
+        def count_rows_with_concurrent_update(table):
+            nonlocal inserted
+            count = count_rows(table)
+            if table == "calls" and not inserted:
+                inserted = True
+                with writer.transaction():
+                    file_id = writer.upsert_file(
+                        "concurrent.js", "javascript", 1, "new", 1
+                    )
+                    writer.conn.execute(
+                        "INSERT INTO calls(caller_name, callee, file_id, line) "
+                        "VALUES('', 'external', ?, 1)",
+                        (file_id,),
+                    )
+            return count
+
+        self.store.count_rows = count_rows_with_concurrent_update
+        try:
+            stats = query_stats(self.store)
+        finally:
+            self.store.count_rows = count_rows
+            writer.close()
+
+        self.assertTrue(inserted)
+        self.assertEqual(stats, expected)
+
 
 if __name__ == "__main__":
     unittest.main()
