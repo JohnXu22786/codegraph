@@ -375,6 +375,72 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertIn("Shape", by_q)
         self.assertEqual(by_q["Shape"].kind, "interface")
         self.assertEqual(by_q["Shape.area"].kind, "method")
+        self.assertEqual(by_q["Shape.area"].parent, "Shape")
+        self.assertEqual(by_q["Square.area"].kind, "method")
+        self.assertEqual(by_q["Square.area"].parent, "Square")
+
+    def test_rust_trait_impl_non_path_targets(self):
+        src = (
+            "trait LocalTrait {}\n"
+            "impl LocalTrait for *const Marker {\n"
+            "    fn pointer_method(&self) {}\n"
+            "}\n"
+            "impl LocalTrait for [u8] {\n"
+            "    fn slice_method(&self) {}\n"
+            "}\n"
+            "impl LocalTrait for (A, B) {\n"
+            "    fn tuple_method(&self) {}\n"
+            "}\n"
+            "impl<'a, T> LocalTrait for &'a mut ::module::Borrowed<T> {\n"
+            "    fn borrow_method(&self) {}\n"
+            "}\n"
+            "impl<T> LocalTrait for &&module::Nested<T> {\n"
+            "    fn nested_ref_method(&self) {}\n"
+            "}\n"
+            "impl LocalTrait for Buffer<{1 + 1}> {\n"
+            "    fn const_method(&self) {}\n"
+            "}\n"
+            "impl LocalTrait for crate::École {\n"
+            "    fn unicode_method(&self) {}\n"
+            "}\n"
+            "impl LocalTrait for crate::r#type {\n"
+            "    fn raw_method(&self) {}\n"
+            "}\n"
+        )
+        scan = quick.quick_scan(src, "rust")
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        for owner, method in (
+            ("*const Marker", "pointer_method"),
+            ("[u8]", "slice_method"),
+            ("(A, B)", "tuple_method"),
+            ("Borrowed", "borrow_method"),
+            ("Nested", "nested_ref_method"),
+            ("Buffer", "const_method"),
+            ("École", "unicode_method"),
+            ("r#type", "raw_method"),
+        ):
+            symbol = by_q[f"{owner}.{method}"]
+            self.assertEqual(symbol.kind, "method")
+            self.assertEqual(symbol.parent, owner)
+
+    def test_rust_impl_nested_generic_bounds(self):
+        src = (
+            "trait LocalTrait {}\n"
+            "impl<F: for<'a> Fn(&'a str)> Widget<F> {\n"
+            "    fn run(&self) {}\n"
+            "}\n"
+            "impl<T: Iterator<Item = U>, U> GenericWidget<T> {\n"
+            "    fn next_item(&self) {}\n"
+            "}\n"
+            "impl<F: for<'a> Fn(&'a str)> LocalTrait for Handler<F> {\n"
+            "    fn handle(&self) {}\n"
+            "}\n"
+        )
+        scan = quick.quick_scan(src, "rust")
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["Widget.run"].parent, "Widget")
+        self.assertEqual(by_q["GenericWidget.next_item"].parent, "GenericWidget")
+        self.assertEqual(by_q["Handler.handle"].parent, "Handler")
 
     def test_rust_char_literal_brace_does_not_extend_impl(self):
         src = (

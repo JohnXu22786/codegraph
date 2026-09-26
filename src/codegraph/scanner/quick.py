@@ -711,7 +711,8 @@ RE_RS_MOD = re.compile(
 RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
 RE_RS_TYPE = re.compile(r"^\s*(?:pub\s+)?(struct|enum)\s+(\w+)")
 RE_RS_TRAIT = re.compile(r"^\s*(?:pub\s+)?trait\s+(\w+)")
-RE_RS_IMPL = re.compile(r"^\s*(?:pub\s+)?(?:unsafe\s+)?impl\s+(?:<\s*[^>]*\s*>)?\s*(\w+)")
+RE_RS_IMPL = re.compile(r"^\s*(?:pub\s+)?(?:unsafe\s+)?impl\b")
+RE_RS_IMPL_FOR = re.compile(r"\s+for\s+(?!<\s*')")
 RE_RS_CHAR = re.compile(
     r"'(?:[^'\\\n]|\\(?:[nrt0\\'\"]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}))'")
 
@@ -927,8 +928,15 @@ def _scan_rust(text, lang, rel_path=None):
         m = RE_RS_IMPL.match(line)
         if m:
             parent = containers[-1][2] if containers else ""
-            qual = f"{parent}.{m.group(1)}" if parent else \
-                (f"{module}.{m.group(1)}" if module else m.group(1))
+            target = RE_RS_IMPL_FOR.search(line, m.end())
+            if target:
+                owner_text = _rust_impl_target(line, target.end())
+            else:
+                start = _rust_impl_type_start(line, m.end())
+                owner_text = _rust_impl_target(line, start)
+            owner = _rust_impl_owner(owner_text)
+            qual = f"{parent}.{owner}" if parent else \
+                (f"{module}.{owner}" if module else owner)
             containers.append((depth, "impl", qual))
             depth += line.count("{") - line.count("}")
             while containers and depth <= containers[-1][0]:
@@ -963,6 +971,108 @@ def _scan_rust(text, lang, rel_path=None):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
     return FileScan(lang, module, recs, calls, _imports_rust(text))
+
+
+def _rust_impl_target(line, start):
+    angle = paren = bracket = brace = 0
+    index = start
+    while index < len(line):
+        char = line[index]
+        top_level = not (angle or paren or bracket or brace)
+        if top_level and char == "{":
+            return line[start:index].strip()
+        if top_level and line.startswith("where", index):
+            before = line[index - 1] if index else " "
+            after_index = index + len("where")
+            after = line[after_index] if after_index < len(line) else " "
+            if not (before.isalnum() or before in "_#") and not (
+                after.isalnum() or after == "_"
+            ):
+                return line[start:index].strip()
+        if char == "'":
+            literal = RE_RS_CHAR.match(line, index)
+            if literal:
+                index = literal.end()
+                continue
+        if char == "<" and not brace:
+            angle += 1
+        elif char == ">" and angle and not brace and not (
+            index and line[index - 1] == "-"
+        ):
+            angle -= 1
+        elif char == "(":
+            paren += 1
+        elif char == ")" and paren:
+            paren -= 1
+        elif char == "[":
+            bracket += 1
+        elif char == "]" and bracket:
+            bracket -= 1
+        elif char == "{":
+            brace += 1
+        elif char == "}" and brace:
+            brace -= 1
+        index += 1
+    return line[start:].strip()
+
+
+def _rust_impl_type_start(line, start):
+    index = start
+    while index < len(line) and line[index].isspace():
+        index += 1
+    if index == len(line) or line[index] != "<":
+        return index
+
+    angle = paren = bracket = brace = 0
+    while index < len(line):
+        char = line[index]
+        if char == "'":
+            literal = RE_RS_CHAR.match(line, index)
+            if literal:
+                index = literal.end()
+                continue
+        if char == "<" and not brace:
+            angle += 1
+        elif char == ">" and angle and not brace and not (
+            index and line[index - 1] == "-"
+        ):
+            angle -= 1
+            if not angle:
+                index += 1
+                while index < len(line) and line[index].isspace():
+                    index += 1
+                return index
+        elif char == "(":
+            paren += 1
+        elif char == ")" and paren:
+            paren -= 1
+        elif char == "[":
+            bracket += 1
+        elif char == "]" and bracket:
+            bracket -= 1
+        elif char == "{":
+            brace += 1
+        elif char == "}" and brace:
+            brace -= 1
+        index += 1
+    return index
+
+
+def _rust_impl_owner(target):
+    target = " ".join(target.split())
+    path = target
+    while path.startswith("&"):
+        path = re.sub(r"^&\s*(?:'\w+\s*)?(?:mut\s+)?", "", path)
+    path = re.sub(r"\s*::\s*", "::", path)
+    if path.startswith("::"):
+        path = path[2:]
+    if path.startswith(("dyn ", "for<", "impl ")):
+        return target
+    base_path = path.split("<", 1)[0].strip()
+    parts = base_path.split("::")
+    if all(re.fullmatch(r"(?:r#)?[^\W\d]\w*", part) for part in parts):
+        return parts[-1]
+    return target
 
 
 # --------------------------------------------------------------------------
