@@ -563,6 +563,22 @@ class QuickGoJavaRustTest(unittest.TestCase):
             },
         )
 
+    def test_rust_nested_inline_module_keeps_nested_qualification(self):
+        scan = quick.quick_scan(
+            "mod outer { mod inner { fn f() { dep(); } } }\n",
+            "rust",
+            "lib.rs",
+        )
+
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertIn("lib.outer.inner.f", by_q)
+        self.assertNotIn("lib.outer.f", by_q)
+        self.assertEqual(by_q["lib.outer.inner.f"].parent, "lib.outer.inner")
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("lib.outer.inner.f", "dep")},
+        )
+
     def test_rust_inline_module_keeps_trailing_top_level_function(self):
         scan = quick.quick_scan(
             "mod util { pub fn run() { dependency(); } } "
