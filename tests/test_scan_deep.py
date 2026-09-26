@@ -379,6 +379,22 @@ class DeepRustTest(unittest.TestCase):
         self.assertIn(("lib.util.internal", "helper"), calls)
         self.assertIn(("lib.caller", "util::helper"), calls)
 
+    def test_explicit_inline_module_paths_are_calls(self):
+        src = (
+            "mod util { pub fn helper() {} }\n"
+            "mod outer {\n"
+            "    fn caller() { self::helper(); super::util::helper(); "
+            "crate::util::helper(); }\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "rust", "lib.rs")
+
+        self.assertEqual(
+            [call.callee for call in scan.calls],
+            ["self::helper", "super::util::helper", "crate::util::helper"],
+        )
+
     def test_trait_impl_methods_belong_to_implementing_type(self):
         src = (
             "trait Shape {\n"

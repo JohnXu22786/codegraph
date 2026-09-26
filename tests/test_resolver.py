@@ -727,6 +727,47 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_explicit_inline_module_paths_resolve_with_duplicates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.rs").write_text(
+                "mod util { pub fn helper() {} }\n"
+                "mod outer {\n"
+                "    mod nested { pub fn helper() {} }\n"
+                "    fn helper() {}\n"
+                "    fn self_caller() { self::nested::helper(); }\n"
+                "    fn crate_caller() { crate::outer::nested::helper(); }\n"
+                "    fn super_caller() { super::util::helper(); }\n"
+                "}\n"
+                "fn helper() {}\n",
+                encoding="utf-8",
+            )
+            (root / "other.rs").write_text(
+                "fn helper() {}\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                nested = store.symbol_by_qualname("lib.outer.nested.helper")
+                root_util = store.symbol_by_qualname("lib.util.helper")
+                self.assertIsNotNone(nested)
+                self.assertIsNotNone(root_util)
+                file_id = store.file_by_path("lib.rs")["id"]
+                rows = {
+                    row["callee"]: row["callee_id"]
+                    for row in store.conn.execute(
+                        "SELECT callee, callee_id FROM calls WHERE file_id = ?",
+                        (file_id,),
+                    )
+                }
+                self.assertEqual(rows["self::nested::helper"], nested["id"])
+                self.assertEqual(rows["crate::outer::nested::helper"], nested["id"])
+                self.assertEqual(rows["super::util::helper"], root_util["id"])
+            finally:
+                store.close()
+
     def test_rust_mod_and_path_calls(self):
         rid = self._callee("rustx/main.rs", "lib::dist")
         self.assertIsNotNone(rid)

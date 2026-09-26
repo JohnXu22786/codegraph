@@ -94,19 +94,10 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     if row:
         return row["id"]
     if file["lang"] == "rust" and file["module"] and "::" in callee_text:
-        parts = callee_text.split("::")
-        if parts[0] not in ("crate", "self", "super"):
-            # Inline Rust module qualnames include the file module and use dots.
-            scope = file["module"]
-            if caller_name:
-                caller = store.conn.execute(
-                    "SELECT parent FROM symbols WHERE file_id = ? AND qualname = ? "
-                    "ORDER BY id LIMIT 1",
-                    (file_id, caller_name),
-                ).fetchone()
-                if caller and caller["parent"]:
-                    scope = caller["parent"]
-            qualname = f"{scope}.{'.'.join(parts)}"
+        qualname = _rust_inline_qualname(
+            store, file_id, callee_text, caller_name
+        )
+        if qualname:
             row = store.conn.execute(
                 "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
                 "ORDER BY id LIMIT 1",
@@ -315,6 +306,37 @@ def _names_of(imp) -> list:
         return json.loads(imp["names"] or "[]")
     except (ValueError, TypeError):
         return []
+
+
+def _rust_inline_qualname(store: IndexStore, file_id: int, callee_text: str,
+                          caller_name=None):
+    """Map a Rust path to an inline-module qualname in the same file."""
+    file = store.file_by_id(file_id)
+    if file is None or file["lang"] != "rust" or not file["module"]:
+        return None
+    parts = callee_text.split("::")
+    scope = file["module"]
+    if caller_name:
+        caller = store.conn.execute(
+            "SELECT parent FROM symbols WHERE file_id = ? AND qualname = ? "
+            "ORDER BY id LIMIT 1",
+            (file_id, caller_name),
+        ).fetchone()
+        if caller and caller["parent"]:
+            scope = caller["parent"]
+    if parts[0] == "crate":
+        parts = parts[1:]
+        scope = file["module"]
+    elif parts[0] == "self":
+        parts = parts[1:]
+    elif parts[0] == "super":
+        while parts and parts[0] == "super":
+            parts = parts[1:]
+            if "." in scope:
+                scope = scope.rsplit(".", 1)[0]
+    if not parts or parts[0] in ("crate", "self", "super"):
+        return None
+    return f"{scope}.{'.'.join(parts)}"
 
 
 def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
