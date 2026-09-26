@@ -184,6 +184,38 @@ def _go_package_dirs(root: Path, module_text: str):
     return list(dict.fromkeys(candidates))
 
 
+def _java_package_files(store: IndexStore, package: str):
+    rows = store.conn.execute(
+        "SELECT id, path FROM files WHERE lang = 'java' AND module = ? "
+        "ORDER BY path",
+        (package,),
+    )
+    return [(row["id"], Path(row["path"])) for row in rows]
+
+
+def _java_class_files(store: IndexStore, class_names):
+    class_names = list(dict.fromkeys(class_names))
+    if not class_names:
+        return []
+    placeholders = ",".join("?" for _ in class_names)
+    rows = store.conn.execute(
+        "SELECT DISTINCT f.id, f.path, s.qualname FROM symbols s "
+        "JOIN files f ON f.id = s.file_id "
+        "WHERE f.lang = 'java' AND s.kind IN ('class', 'interface') "
+        f"AND s.qualname IN ({placeholders}) ORDER BY f.path",
+        class_names,
+    )
+    by_name = {}
+    for row in rows:
+        by_name.setdefault(row["qualname"], []).append(
+            (row["id"], Path(row["path"]))
+        )
+    for name in class_names:
+        if name in by_name:
+            return by_name[name]
+    return []
+
+
 def _imported_files(store: IndexStore, file_id: int):
     """Ids of every file this file imports, plus submodules imported by name."""
     file = store.file_by_id(file_id)
@@ -191,6 +223,7 @@ def _imported_files(store: IndexStore, file_id: int):
         return set()
     out = set()
     expanded_go_dirs = set()
+    expanded_java_packages = set()
     for imp in store.imports_for_file(file_id):
         if imp["target_id"]:
             out.add(imp["target_id"])
@@ -205,6 +238,18 @@ def _imported_files(store: IndexStore, file_id: int):
                             for package_file_id, _ in
                             _go_package_files(store, package_dir)
                         )
+            if file["lang"] == "java" and imp["module"].endswith(".*"):
+                package = imp["module"][:-2]
+                target = store.file_by_id(imp["target_id"])
+                if (target is not None and target["lang"] == "java" and
+                        target["module"] == package and
+                        package not in expanded_java_packages):
+                    expanded_java_packages.add(package)
+                    out.update(
+                        package_file_id
+                        for package_file_id, _ in
+                        _java_package_files(store, package)
+                    )
         for nm in _names_of(imp):
             base = imp["module"]
             if file["lang"] == "python" and base.startswith("."):
@@ -1148,6 +1193,24 @@ def _module_candidate_paths(store: IndexStore, file_id: int, module_text: str,
                 )
         return [rel for cand in dict.fromkeys(cands)
                 if (rel := rel_of(cand)) is not None]
+
+    if module_text.endswith(".*"):
+        package_or_type = module_text[:-2]
+        class_files = _java_class_files(store, [package_or_type])
+        if class_files:
+            return [path for _, path in class_files]
+        package_files = _java_package_files(store, package_or_type)
+        if package_files:
+            return [package_files[0][1]]
+        module_text = package_or_type
+    else:
+        parts = module_text.split(".")
+        class_names = [
+            ".".join(parts[:end]) for end in range(len(parts), 0, -1)
+        ]
+        class_files = _java_class_files(store, class_names)
+        if class_files:
+            return [path for _, path in class_files]
 
     parts = module_text.split(".")
     target = Path(*parts)
