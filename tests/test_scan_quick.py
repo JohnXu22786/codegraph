@@ -628,6 +628,26 @@ class QuickGoJavaRustTest(unittest.TestCase):
             {("lib.outer.g", "done")},
         )
 
+    def test_rust_inline_modules_retain_use_and_mod_imports(self):
+        scan = quick.quick_scan(
+            "mod inline_use { use crate::foo; fn f() {} }\n"
+            "mod inline_mod { mod child; }\n"
+            "mod trailing_use {} use crate::bar;\n"
+            "mod trailing_mod {} mod sibling;\n",
+            "rust",
+            "lib.rs",
+        )
+
+        self.assertEqual(
+            [(item.module, item.kind, item.line) for item in scan.imports],
+            [
+                ("crate::foo", "use", 1),
+                ("child", "mod", 2),
+                ("crate::bar", "use", 3),
+                ("sibling", "mod", 4),
+            ],
+        )
+
     def test_rust_explicit_module_paths_are_calls(self):
         src = (
             "mod util { pub fn helper() {} }\n"

@@ -1396,6 +1396,7 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
     inline_module_lines = set()
     inline_function_qualnames = set()
     trailing_symbols = []
+    inline_imports = []
     for idx, line in enumerate(lines, start=1):
         m = RE_RS_INLINE_MOD.match(line)
         if m:
@@ -1418,6 +1419,10 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
             if module_close is not None:
                 body = line[m.end():module_close]
                 inline_module_lines.add(idx)
+                inline_imports.extend(
+                    ImportRec(item.module, list(item.names), item.kind, idx)
+                    for item in _imports_rust(body)
+                )
                 for fn_index, fn in enumerate(RE_RS_INLINE_FN.finditer(body)):
                     name = fn.group(1)
                     fn_qual = f"{qual}.{name}"
@@ -1461,6 +1466,10 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
                     inline_calls.extend(
                         CallRec(call.caller, call.callee, idx)
                         for call in trailing_scan.calls
+                    )
+                    inline_imports.extend(
+                        ImportRec(item.module, list(item.names), item.kind, idx)
+                        for item in trailing_scan.imports
                     )
             depth += line.count("{") - line.count("}")
             while containers and depth <= containers[-1][0]:
@@ -1545,7 +1554,9 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
             calls.append(CallRec("", callee, idx))
     _assign_callers(calls, recs)
     calls.extend(inline_calls)
-    return FileScan(lang, module, recs, calls, _imports_rust(text))
+    return FileScan(
+        lang, module, recs, calls, _imports_rust(text) + inline_imports
+    )
 
 
 def _rust_impl_target(line, start):
