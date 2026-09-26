@@ -354,13 +354,16 @@ class IndexStore:
             )
             out = [dict(r) for r in rows]
         except sqlite3.OperationalError:
-            like = f"%{text}%"
+            escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace(
+                "_", "\\_"
+            )
+            like = f"%{escaped}%"
             rows = self.conn.execute(
                 "SELECT s.id, s.kind, s.qualname, s.name, s.doc, s.signature, "
                 "       s.start_line, s.end_line, f.path "
                 "FROM symbols s JOIN files f ON f.id = s.file_id "
-                "WHERE s.qualname LIKE ? OR s.name LIKE ? OR s.doc LIKE ? "
-                "OR s.signature LIKE ? "
+                "WHERE s.qualname LIKE ? ESCAPE '\\' OR s.name LIKE ? ESCAPE '\\' "
+                "OR s.doc LIKE ? ESCAPE '\\' OR s.signature LIKE ? ESCAPE '\\' "
                 "ORDER BY s.qualname LIMIT ?",
                 (like, like, like, like, limit),
             )

@@ -205,6 +205,30 @@ class StoreTest(unittest.TestCase):
 
         self.assertEqual([hit["qualname"] for hit in hits], ["a.render"])
 
+    def test_invalid_fts_fallback_treats_like_wildcards_literally(self):
+        fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
+        scan = FileScan(
+            lang="python",
+            symbols=[
+                SymbolRec("function", "percent", "a.percent", "", 1, 1, "", 'literal %"'),
+                SymbolRec("function", "underscore", "a.underscore", "", 2, 2, "", 'literal _"'),
+                SymbolRec("function", "wildcard", "a.wildcard", "", 3, 3, "", 'text x"'),
+            ],
+            calls=[],
+            imports=[],
+        )
+        with self.store.transaction():
+            self.store.replace_file_payload(fid, scan)
+
+        self.assertEqual(
+            [hit["qualname"] for hit in self.store.search('%"')],
+            ["a.percent"],
+        )
+        self.assertEqual(
+            [hit["qualname"] for hit in self.store.search('_"')],
+            ["a.underscore"],
+        )
+
     def test_symbols_by_name_rejects_negative_limit(self):
         fid = self.store.upsert_file("a.py", "python", 10, "d", 3)
         with self.store.transaction():
