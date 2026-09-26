@@ -170,6 +170,52 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_resolver_version_change_re_resolves_typescript_js_specifier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "app.ts").write_text(
+                'import { target } from "./util.js";\n'
+                "export function call() { return target(); }\n",
+                encoding="utf-8",
+            )
+            (root / "util.ts").write_text(
+                "export function target() { return 'source'; }\n",
+                encoding="utf-8",
+            )
+            (root / "util.js").write_text(
+                "export function target() { return 'output'; }\n",
+                encoding="utf-8",
+            )
+
+            cfg = self._cfg(root=str(root))
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                import_row = store.find_import(module="./util.js")
+                emitted_id = store.file_by_path("util.js")["id"]
+                store.conn.execute(
+                    "UPDATE imports SET target_id = ? WHERE id = ?",
+                    (emitted_id, import_row["id"]),
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config["resolver_version"] = 5
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg)
+            self.assertEqual(report.files_changed, 0)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                import_row = store.find_import(module="./util.js")
+                self.assertEqual(
+                    store.file_by_id(import_row["target_id"])["path"], "util.ts"
+                )
+            finally:
+                store.close()
+
     def test_parent_cargo_workspace_change_re_resolves_member_imports(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
