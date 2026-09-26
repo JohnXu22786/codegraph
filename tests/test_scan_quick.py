@@ -490,6 +490,22 @@ class QuickGoJavaRustTest(unittest.TestCase):
             ],
         )
 
+    def test_go_grouped_imports_keep_spec_line_numbers(self):
+        src = (
+            "package main\n"
+            "import (\n"
+            '    "example.com/acme/one"\n'
+            '    other "example.com/acme/two"\n'
+            ")\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.line) for imp in scan.imports],
+            [("example.com/acme/one", 3), ("example.com/acme/two", 4)],
+        )
+
     def test_go_method_and_interface(self):
         src = (
             "package svc\n\n"
