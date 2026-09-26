@@ -63,7 +63,7 @@ RUST_EXCLUDE = {
     "if", "for", "while", "fn", "return", "impl", "struct", "enum", "trait",
     "match", "let", "mut", "use", "mod", "pub", "unsafe", "ref", "where",
     "loop", "else", "move", "const", "static", "async", "await",
-    "dyn", "type", "in", "union", "crate", "super", "break", "continue",
+    "dyn", "type", "in", "union", "break", "continue",
     "extern", "macro_rules",
 }
 

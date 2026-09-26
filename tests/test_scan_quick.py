@@ -494,6 +494,22 @@ class QuickGoJavaRustTest(unittest.TestCase):
             },
         )
 
+    def test_rust_explicit_module_paths_are_calls(self):
+        src = (
+            "mod util { pub fn helper() {} }\n"
+            "mod outer {\n"
+            "    fn caller() { self::helper(); super::util::helper(); "
+            "crate::util::helper(); }\n"
+            "}\n"
+        )
+
+        scan = quick.quick_scan(src, "rust", "lib.rs")
+
+        self.assertEqual(
+            [call.callee for call in scan.calls],
+            ["self::helper", "super::util::helper", "crate::util::helper"],
+        )
+
     def test_rust_trait(self):
         src = (
             "pub trait Shape {\n"
