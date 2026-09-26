@@ -1070,6 +1070,30 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_inline_module_resolves_trailing_same_line_caller(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.rs").write_text(
+                "mod util { pub fn run() {} } "
+                "fn caller() { util::run(); }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("lib.rs")["id"]
+                caller_id = store.symbol_by_qualname("lib.caller")["id"]
+                target_id = store.symbol_by_qualname("lib.util.run")["id"]
+                edge = store.find_call(callee="util::run", file_id=file_id)
+                self.assertIsNotNone(edge)
+                self.assertEqual(edge["caller_id"], caller_id)
+                self.assertEqual(edge["callee_id"], target_id)
+            finally:
+                store.close()
+
     def test_rust_mod_and_path_calls(self):
         rid = self._callee("rustx/main.rs", "lib::dist")
         self.assertIsNotNone(rid)

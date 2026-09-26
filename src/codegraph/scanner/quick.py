@@ -1357,6 +1357,8 @@ def _scan_rust(text, lang, rel_path=None):
     items = []
     inline_calls = []
     inline_module_lines = set()
+    inline_function_qualnames = set()
+    trailing_symbols = []
     for idx, line in enumerate(lines, start=1):
         m = RE_RS_INLINE_MOD.match(line)
         if m:
@@ -1382,6 +1384,7 @@ def _scan_rust(text, lang, rel_path=None):
                 for fn_index, fn in enumerate(RE_RS_INLINE_FN.finditer(body)):
                     name = fn.group(1)
                     fn_qual = f"{qual}.{name}"
+                    inline_function_qualnames.add(fn_qual)
                     items.append((idx, depth + fn_index + 1, SymbolRec(
                         "function", name, fn_qual, qual, idx, 0,
                         fn.group(2).strip(),
@@ -1403,6 +1406,21 @@ def _scan_rust(text, lang, rel_path=None):
                     inline_calls.extend(
                         CallRec(fn_qual, callee, idx)
                         for callee in _calls_in_line(fn_body, RUST_EXCLUDE)
+                    )
+                trailing = line[module_close + 1:]
+                if trailing.strip():
+                    trailing_scan = _scan_rust(trailing, lang, rel_path)
+                    trailing_symbols.extend(
+                        (idx, SymbolRec(
+                            symbol.kind, symbol.name, symbol.qualname,
+                            symbol.parent, idx, idx, symbol.signature,
+                            symbol.doc, symbol.default_export,
+                        ))
+                        for symbol in trailing_scan.symbols
+                    )
+                    inline_calls.extend(
+                        CallRec(call.caller, call.callee, idx)
+                        for call in trailing_scan.calls
                     )
             depth += line.count("{") - line.count("}")
             while containers and depth <= containers[-1][0]:
@@ -1464,6 +1482,10 @@ def _scan_rust(text, lang, rel_path=None):
         while containers and depth <= containers[-1][0]:
             containers.pop()
     recs = _finalize(items, n)
+    for rec in recs:
+        if rec.qualname in inline_function_qualnames:
+            rec.end = rec.start
+    recs.extend(symbol for _, symbol in trailing_symbols)
     calls = []
     for idx, line in enumerate(lines, start=1):
         if idx in inline_module_lines:
