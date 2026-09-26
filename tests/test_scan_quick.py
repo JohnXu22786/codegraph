@@ -60,6 +60,50 @@ class QuickPythonTest(unittest.TestCase):
             [("os", "module", 2), ("sys", "module", 2)],
         )
 
+    def test_semicolon_separated_imports(self):
+        source = (
+            "import os; import sys\n"
+            "from package import alpha; from other import beta\n"
+        )
+        scan = quick.quick_scan(source, "python")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [
+                ("os", [], "module", 1),
+                ("sys", [], "module", 1),
+                ("package", ["alpha"], "from", 2),
+                ("other", ["beta"], "from", 2),
+            ],
+        )
+
+    def test_semicolon_imports_survive_unrelated_syntax_error(self):
+        source = (
+            "import os; import sys\n"
+            "from package import alpha; from other import beta\n"
+            "from . import local as alias; from ..pkg import Thing as T\n"
+            "def broken(:\n"
+        )
+        scan = quick.quick_scan(source, "python")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [
+                ("os", [], "module", 1),
+                ("sys", [], "module", 1),
+                ("package", ["alpha"], "from", 2),
+                ("other", ["beta"], "from", 2),
+                (".", ["local as alias"], "from", 3),
+                ("..pkg", ["Thing as T"], "from", 3),
+            ],
+        )
+
+    def test_inline_semicolon_imports_survive_unrelated_syntax_error(self):
+        source = "if enabled: import os; import sys\ndef broken(:\n"
+        scan = quick.quick_scan(source, "python")
+        self.assertEqual(
+            [(item.module, item.names, item.kind, item.line) for item in scan.imports],
+            [("os", [], "module", 1), ("sys", [], "module", 1)],
+        )
+
     def test_backslash_continued_comma_separated_imports(self):
         scan = quick.quick_scan("import os, \\\n    sys as system\n", "python")
         self.assertEqual(

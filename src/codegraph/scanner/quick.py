@@ -10,7 +10,10 @@ installed. Both scanners emit the same data shape.
 
 from __future__ import annotations
 
+import ast
+import io
 import re
+import tokenize
 
 from ..models import CallRec, FileScan, ImportRec, SymbolRec
 from . import languages
@@ -149,7 +152,7 @@ def _python_doc(lines, header_idx):
     return next((x.strip() for x in doc.splitlines() if x.strip()), "")
 
 
-def _imports_python(text):
+def _imports_python_heuristic(text):
     imports = []
     lines = re.split(r"(?<=\n)|(?<=\r)(?!\n)", text)
     idx = 0
@@ -222,6 +225,108 @@ def _imports_python(text):
         if names or parenthesized:
             imports.append(ImportRec(m.group(1), names, "from", start + 1))
     return imports
+
+
+def _imports_from_ast(tree, line_offset=0):
+    nodes = sorted(
+        (node for node in ast.walk(tree)
+         if isinstance(node, (ast.Import, ast.ImportFrom))),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
+    imports = []
+    for node in nodes:
+        line = node.lineno + line_offset
+        if isinstance(node, ast.Import):
+            imports.extend(
+                ImportRec(alias.name, [], "module", line)
+                for alias in node.names
+            )
+        else:
+            module = "." * node.level + (node.module or "")
+            names = [
+                alias.name if alias.asname is None
+                else f"{alias.name} as {alias.asname}"
+                for alias in node.names
+            ]
+            imports.append(ImportRec(module, names, "from", line))
+    return imports
+
+
+def _imports_python_tokenized(text):
+    imports = []
+    statement = []
+    source_lines = text.splitlines(keepends=True)
+
+    def append_statement():
+        nonlocal statement
+        tokens = [
+            token for token in statement
+            if token.type not in (tokenize.COMMENT, tokenize.NL)
+        ]
+        statement = []
+        if not tokens:
+            return
+        if tokens[0].type != tokenize.NAME or tokens[0].string not in ("import", "from"):
+            depth = 0
+            colon_idx = None
+            for idx, token in enumerate(tokens):
+                if token.type != tokenize.OP:
+                    continue
+                if token.string in ("(", "[", "{"):
+                    depth += 1
+                elif token.string in (")", "]", "}"):
+                    depth = max(0, depth - 1)
+                elif token.string == ":" and depth == 0:
+                    colon_idx = idx
+                    break
+            if colon_idx is None:
+                return
+            import_idx = colon_idx + 1
+            if import_idx >= len(tokens) or tokens[import_idx].type != tokenize.NAME:
+                return
+            if tokens[import_idx].string not in ("import", "from"):
+                return
+            tokens = tokens[import_idx:]
+
+        start_line, start_col = tokens[0].start
+        end_line, end_col = tokens[-1].end
+        if start_line == end_line:
+            source = source_lines[start_line - 1][start_col:end_col]
+        else:
+            source = (
+                source_lines[start_line - 1][start_col:]
+                + "".join(source_lines[start_line:end_line - 1])
+                + source_lines[end_line - 1][:end_col]
+            )
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, ValueError):
+            return
+        imports.extend(_imports_from_ast(tree, start_line - 1))
+
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type in (tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT):
+                continue
+            if token.type in (tokenize.NEWLINE, tokenize.ENDMARKER):
+                append_statement()
+            elif token.type == tokenize.OP and token.string == ";":
+                append_statement()
+            else:
+                statement.append(token)
+    except (IndentationError, SyntaxError, tokenize.TokenError):
+        append_statement()
+    return imports
+
+
+def _imports_python(text):
+    if ";" not in text:
+        return _imports_python_heuristic(text)
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return _imports_python_tokenized(text)
+    return _imports_from_ast(tree)
 
 
 def _python_body_end(lines, start, indent):
