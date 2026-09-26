@@ -794,11 +794,54 @@ def _imports_javascript_dynamic(text, jsx=False):
     return imports
 
 
+def _javascript_import_names(clause):
+    names = []
+    named = re.search(r"\{([^}]*)\}", clause, re.S)
+    prefix = clause[:named.start()] if named else clause
+    names.extend(
+        name for name in RE_JS_IDENT.findall(prefix)
+        if name not in ("as", "type")
+    )
+    if named:
+        for specifier in named.group(1).split(","):
+            specifier = specifier.strip()
+            if specifier.startswith("type "):
+                specifier = specifier[5:].strip()
+            alias = re.fullmatch(
+                r"([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)",
+                specifier,
+            )
+            if alias:
+                names.append(f"{alias.group(1)} as {alias.group(2)}")
+            else:
+                names.extend(
+                    name for name in RE_JS_IDENT.findall(specifier)
+                    if name not in ("as", "type")
+                )
+    return names
+
+
+def _javascript_require_names(clause):
+    names = []
+    for binding in clause.strip().strip("{} \t").split(","):
+        binding = binding.strip().strip("{} \t")
+        if not binding:
+            continue
+        alias = re.fullmatch(
+            r"([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)", binding
+        )
+        if alias:
+            names.append(f"{alias.group(1)} as {alias.group(2)}")
+        else:
+            names.append(binding)
+    return names
+
+
 def _imports_javascript(text, jsx=False):
     imports = []
     for m in RE_JS_ESM.finditer(text):
         clause = m.group(1) or ""
-        names = [x for x in RE_JS_IDENT.findall(clause) if x != "as"]
+        names = _javascript_import_names(clause)
         imports.append(ImportRec(m.group(2), names, "import", _line_no(text, m.start())))
     imports.extend(_imports_javascript_dynamic(text, jsx=jsx))
     # pair each require(...) with the *nearest preceding* binding statement;
@@ -813,7 +856,7 @@ def _imports_javascript(text, jsx=False):
             else:
                 break
         if stmt is not None:
-            names = [x.strip() for x in stmt.group(1).split(",") if x.strip()]
+            names = _javascript_require_names(stmt.group(1))
         imports.append(ImportRec(m.group(1), names, "require", _line_no(text, m.start())))
     return imports
 

@@ -244,6 +244,44 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_javascript_alias_imports_resolve_source_exports(self):
+        statements = (
+            "import { foo as bar } from './util.js';\n",
+            "const { foo: bar } = require('./util.js');\n",
+        )
+        for statement in statements:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "app.js").write_text(
+                    statement + "function caller() { return bar(); }\n",
+                    encoding="utf-8",
+                )
+                (root / "util.js").write_text(
+                    "export function foo() { return 1; }\n", encoding="utf-8")
+                (root / "other.js").write_text(
+                    "export function bar() { return 2; }\n", encoding="utf-8")
+
+                cfg = load_config(root=str(root))
+                cfg.engine = "quick"
+                build_index(cfg)
+                store = IndexStore(str(cfg.db_path))
+                try:
+                    app_id = store.file_by_path("app.js")["id"]
+                    target_id = resolve_callee(store, app_id, "bar")
+                    self.assertIsNotNone(target_id)
+                    target = store.symbol_by_id(target_id)
+                    self.assertEqual(target.name, "foo")
+                    self.assertEqual(
+                        store.file_by_id(target.file_id)["path"], "util.js"
+                    )
+                    call_ids = [row["callee_id"] for row in store.conn.execute(
+                        "SELECT callee_id FROM calls WHERE file_id = ?",
+                        (app_id,),
+                    )]
+                    self.assertEqual(call_ids, [target_id])
+                finally:
+                    store.close()
+
     def test_typescript_runtime_specifiers_prefer_source_extensions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

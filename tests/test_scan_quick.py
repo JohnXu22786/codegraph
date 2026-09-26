@@ -272,6 +272,15 @@ class QuickJavascriptTest(unittest.TestCase):
             [("./foo", ["useFoo"], "import", 1)],
         )
 
+    def test_esm_named_import_preserves_alias_binding(self):
+        scan = quick.quick_scan(
+            "import { foo as bar } from './util.js';\n",
+            "javascript",
+            "app.js",
+        )
+
+        self.assertEqual(scan.imports[0].names, ["foo as bar"])
+
     def test_dynamic_import_is_a_module_dependency(self):
         src = (
             "async function load() {\n"
@@ -348,6 +357,15 @@ class QuickJavascriptTest(unittest.TestCase):
         self.assertEqual(scan.imports[0].names, ["fmt"])
         self.assertEqual(scan.imports[0].kind, "require")
         self.assertIn(("web/app.greet", "fmt"), {(c.caller, c.callee) for c in scan.calls})
+
+    def test_commonjs_destructuring_preserves_alias_binding(self):
+        scan = quick.quick_scan(
+            "const { foo: bar } = require('./util.js');\n",
+            "javascript",
+            "app.js",
+        )
+
+        self.assertEqual(scan.imports[0].names, ["foo as bar"])
 
     def test_arrow_function_and_interface(self):
         src = (

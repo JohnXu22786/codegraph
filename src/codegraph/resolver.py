@@ -102,6 +102,9 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     alias_target = _rust_alias_symbol(store, file_id, callee_text)
     if alias_target is not None:
         return alias_target
+    alias_target = _javascript_alias_symbol(store, file_id, callee_text)
+    if alias_target is not None:
+        return alias_target
 
     # 2. files reachable through this file's imports
     candidates = _imported_files(store, file_id) - blocked_file_ids
@@ -316,6 +319,29 @@ def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
         ).fetchall()
         if len(rows) == 1:
             return rows[0]["id"]
+    return None
+
+
+def _javascript_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
+    """Resolve calls through aliased JavaScript or TypeScript imports."""
+    file = store.file_by_id(file_id)
+    if file is None or file["lang"] not in ("javascript", "typescript"):
+        return None
+    for imp in store.imports_for_file(file_id):
+        if imp["kind"] not in ("import", "require") or not imp["target_id"]:
+            continue
+        for binding in _names_of(imp):
+            if " as " not in binding:
+                continue
+            source_name, local_name = binding.split(" as ", 1)
+            if callee_text != local_name.strip():
+                continue
+            rows = store.conn.execute(
+                "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
+                (imp["target_id"], source_name.strip()),
+            ).fetchall()
+            if len(rows) == 1:
+                return rows[0]["id"]
     return None
 
 
