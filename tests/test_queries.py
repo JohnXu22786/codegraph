@@ -159,6 +159,54 @@ class QueryTest(unittest.TestCase):
         got2 = sorted(r["path"] for r in rows2)
         self.assertEqual(got2, ["web/app.js", "web/index.ts"])
 
+    def test_dependents_include_all_files_in_java_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            models = root / "models"
+            app = root / "app"
+            models.mkdir()
+            app.mkdir()
+            (models / "Foo.java").write_text(
+                "package sample.models;\npublic class Foo {}\n",
+                encoding="utf-8",
+            )
+            (models / "Bar.java").write_text(
+                "package sample.models;\npublic class Bar {}\n",
+                encoding="utf-8",
+            )
+            (app / "One.java").write_text(
+                "package sample.app;\nimport sample.models.Foo;\n",
+                encoding="utf-8",
+            )
+            (app / "Two.java").write_text(
+                "package sample.app;\nimport sample.models.Bar;\n",
+                encoding="utf-8",
+            )
+            (app / "Both.java").write_text(
+                "package sample.app;\n"
+                "import sample.models.Foo;\n"
+                "import sample.models.Bar;\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "sample.models")
+                self.assertEqual(
+                    [row["path"] for row in rows],
+                    ["app/Both.java", "app/One.java", "app/Two.java"],
+                )
+                limited = query_dependents(store, "sample.models", limit=2)
+                self.assertEqual(
+                    [row["path"] for row in limited],
+                    ["app/Both.java", "app/One.java"],
+                )
+            finally:
+                store.close()
+
     def test_dependents_limit_deduplicates_direct_import_rows(self):
         """Repeated imports must not consume dependent-file limit slots."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -30,32 +30,25 @@ def _find_symbol(store: IndexStore, symbol: str):
     return None
 
 
-def _resolve_module_arg(store: IndexStore, module: str):
-    """Map a user-supplied module (path or module id) to a file row."""
+def _resolve_module_targets(store: IndexStore, module: str):
+    """Resolve a file path to one target or a module id to all its files."""
     if not module:
-        return None
+        return [], "module", module
     row = store.file_by_path(module)
     if row:
-        return row
+        return [row], "file", row["id"]
     row = store.file_by_path(module + ".py")  # bare "pkg.cart" style
     if row:
-        return row
-    return store.file_by_module(module)
+        return [row], "file", row["id"]
+    rows = store.conn.execute(
+        "SELECT * FROM files WHERE module = ? ORDER BY id", (module,)
+    ).fetchall()
+    return rows, "module", module
 
 
 def _resolve_module_files(store: IndexStore, module: str):
     """Map a path to one file or a module id to all matching files."""
-    if not module:
-        return []
-    row = store.file_by_path(module)
-    if row:
-        return [row]
-    row = store.file_by_path(module + ".py")
-    if row:
-        return [row]
-    return store.conn.execute(
-        "SELECT * FROM files WHERE module = ? ORDER BY id", (module,)
-    ).fetchall()
+    return _resolve_module_targets(store, module)[0]
 
 
 @_consistent_snapshot
@@ -136,27 +129,36 @@ def query_deps(store: IndexStore, module: str, limit: int = 200):
 def query_dependents(store: IndexStore, module: str, limit: int = 200):
     """Files/packages that import ``module`` (reverse dependencies).
 
-    Two kinds of link count: imports whose resolved target is the module's
-    file, and imports that pull the module in by member name
+    Two kinds of link count: imports whose resolved target is one of the
+    module's files, and imports that pull the module in by member name
     (``from pkg import pricing`` targets pkg/__init__.py but depends on
     pkg/pricing.py too).
     """
     if limit < 0:
         raise ValueError("limit must be non-negative")
-    file = _resolve_module_arg(store, module)
-    if file is None:
+    files, target_kind, target_value = _resolve_module_targets(store, module)
+    if not files:
         return []
+    target_query = (
+        "SELECT id FROM files WHERE id = ?"
+        if target_kind == "file"
+        else "SELECT id FROM files WHERE module = ?"
+    )
+    file = files[0]
     rows = store.conn.execute(
-        "SELECT f.path, i.module, i.line "
-        "FROM imports i JOIN files f ON f.id = i.file_id "
-        "WHERE i.target_id = ? AND NOT EXISTS ("
-        "  SELECT 1 FROM imports earlier "
-        "  WHERE earlier.file_id = i.file_id "
-        "    AND earlier.target_id = i.target_id "
-        "    AND (earlier.line < i.line OR "
-        "         (earlier.line = i.line AND earlier.id < i.id))"
-        ") ORDER BY f.path, i.line LIMIT ?",
-        (file["id"], limit),
+        f"WITH targets AS ({target_query}), matched AS ("
+        "  SELECT i.id, i.file_id, i.module, i.line, f.path "
+        "  FROM imports i JOIN files f ON f.id = i.file_id "
+        "  WHERE i.target_id IN (SELECT id FROM targets)"
+        ") "
+        "SELECT m.path, m.module, m.line "
+        "FROM matched m WHERE NOT EXISTS ("
+        "  SELECT 1 FROM matched earlier "
+        "  WHERE earlier.file_id = m.file_id "
+        "    AND (earlier.line < m.line OR "
+        "         (earlier.line = m.line AND earlier.id < m.id))"
+        ") ORDER BY m.path, m.line, m.id LIMIT ?",
+        (target_value, limit),
     )
     results = [{"path": r["path"], "module": r["module"], "line": r["line"]}
                for r in rows]
