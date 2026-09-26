@@ -1,5 +1,6 @@
 """Tests for config loading: file merging, env overrides, validation."""
 
+import errno
 import json
 import os
 import tempfile
@@ -256,6 +257,111 @@ class WriteDefaultConfigTest(unittest.TestCase):
             cfg = load_config(root=str(root))
             found = discover_files(root, cfg)
             self.assertEqual([p.name for p in found], ["a.py"])
+
+    def test_does_not_overwrite_existing_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codegraph.json"
+            original = '{"engine": "deep"}\n'
+            path.write_text(original, encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                FileExistsError, "configuration already exists"
+            ):
+                write_default_config(root)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertEqual(list(root.iterdir()), [path])
+
+    def test_failed_publish_leaves_no_partial_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codegraph.json"
+
+            with mock.patch(
+                "codegraph.config.os.link",
+                side_effect=OSError(errno.EIO, "link failed"),
+            ):
+                with self.assertRaisesRegex(OSError, "link failed"):
+                    write_default_config(root)
+
+            self.assertFalse(path.exists())
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_unsupported_links_fail_safely_or_use_windows_rename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codegraph.json"
+
+            with mock.patch(
+                "codegraph.config.os.link",
+                side_effect=OSError(
+                    getattr(errno, "EOPNOTSUPP", errno.EPERM),
+                    "links unsupported",
+                ),
+            ):
+                if os.name == "nt":
+                    self.assertEqual(write_default_config(root), path)
+                else:
+                    with self.assertRaisesRegex(
+                        OSError, "cannot safely create configuration"
+                    ):
+                        write_default_config(root)
+
+            if os.name == "nt":
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(data["root"], ".")
+                self.assertEqual(list(root.iterdir()), [path])
+            else:
+                self.assertFalse(path.exists())
+                self.assertEqual(list(root.iterdir()), [])
+
+    def test_unsupported_links_do_not_overwrite_existing_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codegraph.json"
+            original = '{"engine": "deep"}\n'
+            path.write_text(original, encoding="utf-8")
+
+            with mock.patch(
+                "codegraph.config.os.link",
+                side_effect=OSError(
+                    getattr(errno, "EOPNOTSUPP", errno.EPERM),
+                    "links unsupported",
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    FileExistsError, "configuration already exists"
+                ):
+                    write_default_config(root)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertEqual(list(root.iterdir()), [path])
+
+    def test_windows_rename_collision_preserves_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "codegraph.json"
+            original = '{"engine": "deep"}\n'
+
+            def create_config_then_raise(_source, destination):
+                destination.write_text(original, encoding="utf-8")
+                raise FileExistsError("destination created concurrently")
+
+            with mock.patch(
+                "codegraph.config.os.link",
+                side_effect=OSError(errno.EPERM, "links unsupported"),
+            ), mock.patch("codegraph.config.IS_WINDOWS", True), mock.patch(
+                "codegraph.config.os.rename",
+                side_effect=create_config_then_raise,
+            ):
+                with self.assertRaisesRegex(
+                    FileExistsError, "configuration already exists"
+                ):
+                    write_default_config(root)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+            self.assertEqual(list(root.iterdir()), [path])
 
 
 if __name__ == "__main__":
