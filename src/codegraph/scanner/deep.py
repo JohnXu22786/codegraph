@@ -160,7 +160,7 @@ _CONTAINERS = {
     "typescript": {"class_declaration"},
     "go": set(),
     "java": {"class_declaration", "interface_declaration"},
-    "rust": {"impl_item", "trait_item"},
+    "rust": {"impl_item", "trait_item", "function_item"},
 }
 
 _EXCLUDE = {
@@ -215,7 +215,7 @@ class _Walker:
         self.go_name_scopes = [set()]
         self.stack = []  # (kind, qualname) of open containers
         self.items = []  # (start, depth, SymbolRec)
-        self.raw_calls = []  # (callee, line)
+        self.raw_calls = []  # (callee, line, caller)
         self.imports = []
 
     # -- helpers -----------------------------------------------------------
@@ -476,7 +476,15 @@ class _Walker:
             return
         if head in _EXCLUDE[self.lang]:
             return
-        self.raw_calls.append((callee, node.start_point[0] + 1))
+        caller = ""
+        if self.lang == "rust":
+            for kind, qual in reversed(self.stack):
+                if kind == "module":
+                    break
+                if kind in ("function", "method"):
+                    caller = qual
+                    break
+        self.raw_calls.append((callee, node.start_point[0] + 1, caller))
 
 
 def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
@@ -508,6 +516,9 @@ def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
         walker.walk(child)
 
     recs = _finalize(walker.items, len(lines))
+    if lang == "rust":
+        for rec in recs:
+            rec.end = max(rec.start, rec.end)
     if lang == "python":
         # match the regex scanner's body trimming so module-level calls after
         # the last declaration are never attributed to it
@@ -515,6 +526,9 @@ def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
 
         for r in recs:
             r.end = _python_body_end(lines, r.start, _indent(lines[r.start - 1]))
-    calls = [CallRec("", callee, line) for callee, line in walker.raw_calls]
-    _assign_callers(calls, recs)
+    calls = [
+        CallRec(caller, callee, line)
+        for callee, line, caller in walker.raw_calls
+    ]
+    _assign_callers([call for call in calls if not call.caller], recs)
     return FileScan(lang, module, recs, calls, walker.imports)
