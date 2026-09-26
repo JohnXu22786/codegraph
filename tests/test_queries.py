@@ -346,6 +346,65 @@ class QueryTest(unittest.TestCase):
         rows = query_impact(self.store, "pkg.cart.Cart", depth=3, limit=1)
         self.assertEqual([r["qualname"] for r in rows], ["pkg.cart.create_cart"])
 
+    def test_impact_handles_wide_frontiers_under_sqlite_variable_limit(self):
+        store = IndexStore(":memory:")
+        limit_id = getattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER", None)
+        if not hasattr(store.conn, "setlimit") or limit_id is None:
+            store.close()
+            self.skipTest("SQLite connection variable limits are unavailable")
+
+        try:
+            file_id = store.upsert_file("x.py", "python", 0, "", 0, "x")
+            target_id = store.conn.execute(
+                "INSERT INTO symbols(file_id, kind, name, qualname, start_line, "
+                "end_line) VALUES(?, 'function', 'target', 'x.target', 1, 1)",
+                (file_id,),
+            ).lastrowid
+
+            def add_symbol(name):
+                return store.conn.execute(
+                    "INSERT INTO symbols(file_id, kind, name, qualname, "
+                    "start_line, end_line) VALUES(?, 'function', ?, ?, 1, 1)",
+                    (file_id, name.rsplit(".", 1)[-1], name),
+                ).lastrowid
+
+            def add_call(caller_id, caller, callee_id, callee_name, line):
+                store.conn.execute(
+                    "INSERT INTO calls(caller_id, caller_name, callee, callee_id, "
+                    "file_id, line) VALUES(?, ?, ?, ?, ?, ?)",
+                    (caller_id, caller, callee_name, callee_id, file_id, line),
+                )
+
+            wide_ids = []
+            for i in range(9):
+                name = f"x.wide{i}"
+                caller_id = add_symbol(name)
+                wide_ids.append(caller_id)
+                add_call(caller_id, name, target_id, "target", i + 2)
+
+            shared_a = add_symbol("x.shared_a")
+            shared_b = add_symbol("x.shared_b")
+            unique = add_symbol("x.unique")
+            add_call(shared_a, "x.shared_a", wide_ids[0], "wide0", 20)
+            add_call(shared_a, "x.shared_a", wide_ids[-1], "wide8", 21)
+            add_call(shared_b, "x.shared_b", wide_ids[1], "wide1", 22)
+            add_call(shared_b, "x.shared_b", wide_ids[-1], "wide8", 23)
+            add_call(unique, "x.unique", wide_ids[-1], "wide8", 24)
+
+            old_limit = store.conn.setlimit(limit_id, 10)
+            try:
+                rows = query_impact(store, "x.target", depth=2, limit=12)
+            finally:
+                store.conn.setlimit(limit_id, old_limit)
+        finally:
+            store.close()
+
+        self.assertEqual(
+            {(row["qualname"], row["depth"]) for row in rows},
+            {(f"x.wide{i}", 1) for i in range(9)} |
+            {("x.shared_a", 2), ("x.shared_b", 2), ("x.unique", 2)},
+        )
+
     def test_impact_limit_counts_distinct_callers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

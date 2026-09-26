@@ -216,34 +216,48 @@ def query_impact(store: IndexStore, symbol: str, depth: int = 3, limit: int = 20
     visited = set()
     seen = set()
     results = []
+    variable_limit = 999
+    limit_id = getattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER", None)
+    if hasattr(store.conn, "getlimit") and limit_id is not None:
+        variable_limit = store.conn.getlimit(limit_id)
+    frontier_chunk_size = max(1, variable_limit - 2)
     for hop in range(1, max(0, depth) + 1):
         if not frontier:
             break
-        remaining = limit - len(results)
-        if remaining <= 0:
+        if len(results) >= limit:
             break
-        placeholders = ",".join("?" for _ in frontier)
-        sql = (f"SELECT DISTINCT s.id, s.qualname, s.kind, f.path "
-               f"FROM calls c JOIN symbols s ON s.id = c.caller_id "
-               f"JOIN files f ON f.id = c.file_id "
-               f"WHERE c.callee_id IN ({placeholders})")
-        params = list(frontier)
-        excluded = visited | seen
-        if excluded:
-            excluded_ph = ",".join("?" for _ in excluded)
-            sql += f" AND s.id NOT IN ({excluded_ph})"
-            params += list(excluded)
-        sql += " LIMIT ?"
-        params.append(remaining)
-        rows = store.conn.execute(sql, params)
         next_frontier = set()
-        for r in rows:
-            if r["id"] in seen:  # cycles: keep the shallowest occurrence
-                continue
-            results.append({"depth": hop, "qualname": r["qualname"],
-                            "kind": r["kind"], "path": r["path"]})
-            seen.add(r["id"])
-            next_frontier.add(r["id"])
+        frontier_ids = sorted(frontier)
+        for start in range(0, len(frontier_ids), frontier_chunk_size):
+            chunk = frontier_ids[start:start + frontier_chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            sql = (f"SELECT DISTINCT s.id, s.qualname, s.kind, f.path "
+                   f"FROM calls c JOIN symbols s ON s.id = c.caller_id "
+                   f"JOIN files f ON f.id = c.file_id "
+                   f"WHERE c.callee_id IN ({placeholders}) "
+                   "ORDER BY s.id LIMIT ? OFFSET ?")
+            offset = 0
+            # Continue past already-seen callers when chunks overlap.
+            while len(results) < limit:
+                remaining = limit - len(results)
+                page_size = min(remaining, 1000)
+                rows = store.conn.execute(
+                    sql, chunk + [page_size, offset]
+                ).fetchall()
+                if not rows:
+                    break
+                offset += len(rows)
+                for r in rows:
+                    if r["id"] in visited or r["id"] in seen:
+                        continue
+                    results.append({"depth": hop, "qualname": r["qualname"],
+                                    "kind": r["kind"], "path": r["path"]})
+                    seen.add(r["id"])
+                    next_frontier.add(r["id"])
+                    if len(results) >= limit:
+                        break
+            if len(results) >= limit:
+                break
         visited |= frontier
         frontier = next_frontier
     return results
