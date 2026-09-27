@@ -985,7 +985,7 @@ class QuickGoJavaRustTest(unittest.TestCase):
         scan = quick.quick_scan(src, "javascript")
         names = {i.module: i.names for i in scan.imports}
         self.assertEqual(names["mod-a"], ["first"])
-        self.assertEqual(names["mod-b"], ["second"])
+        self.assertEqual(names["mod-b"], ["* as second"])
 
     def test_asi_bare_call_is_not_a_method(self):
         src = (

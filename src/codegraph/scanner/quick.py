@@ -897,6 +897,14 @@ def _imports_javascript(text, jsx=False):
                     break
         if stmt is not None and not names:
             names = _javascript_require_names(stmt.group(1))
+            binding_prefix = text[stmt.start():stmt.start(1)]
+            if "{" not in binding_prefix:
+                names = [
+                    f"* as {name}" if re.fullmatch(
+                        r"[A-Za-z_$][\w$]*", name
+                    ) else name
+                    for name in names
+                ]
         imports.append(ImportRec(m.group(1), names, "require", _line_no(text, m.start())))
     return imports
 
