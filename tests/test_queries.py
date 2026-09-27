@@ -278,6 +278,34 @@ class QueryTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_dependents_orders_union_before_applying_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "pricing.py").write_text(
+                "def price(item):\n    return item\n", encoding="utf-8")
+            (root / "z_direct.py").write_text(
+                "import pkg.pricing\n", encoding="utf-8")
+            (root / "a_member.py").write_text(
+                "from pkg import pricing\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "pkg.pricing")
+                self.assertEqual(
+                    [row["path"] for row in rows],
+                    ["a_member.py", "z_direct.py"],
+                )
+                limited = query_dependents(store, "pkg.pricing", limit=1)
+                self.assertEqual([row["path"] for row in limited], ["a_member.py"])
+            finally:
+                store.close()
+
     def test_dependents_limit_deduplicates_member_import_rows(self):
         """Repeated member imports must not consume dependent-file limit slots."""
         with tempfile.TemporaryDirectory() as tmp:
