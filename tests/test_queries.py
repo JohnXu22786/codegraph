@@ -580,6 +580,34 @@ class QueryTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_nested_relative_import_uses_its_dot_level_for_dependents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "pkg/__init__.py": "",
+                "pkg/pricing.py": "def price(item):\n    return item\n",
+                "pkg/sub/__init__.py": "",
+                "pkg/sub/sibling.py": "from . import pricing\n",
+                "pkg/sub/ancestor.py": "from .. import pricing\n",
+            }
+            for path, text in files.items():
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "pkg.pricing")
+                self.assertEqual(
+                    {row["path"] for row in rows},
+                    {"pkg/sub/ancestor.py"},
+                )
+            finally:
+                store.close()
+
     def test_stats(self):
         stats = query_stats(self.store)
         self.assertEqual(stats["files"], 14)

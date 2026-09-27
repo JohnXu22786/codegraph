@@ -172,7 +172,8 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
         # file lives in the same package.
         extra = store.conn.execute(
             "WITH matched AS ("
-            "  SELECT i.id, i.file_id, i.module, i.line "
+            "  SELECT i.id, i.file_id, i.module, i.line, "
+            "         impf.module AS importing_module, impf.path AS importing_path "
             "  FROM imports i JOIN files impf ON impf.id = i.file_id "
             "  WHERE (instr(i.names, ?) > 0 OR "
             "  replace(i.names, char(92) || 't', ' ') GLOB ?) AND ("
@@ -182,7 +183,8 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
             "    )))"
             "  )"
             ") "
-            "SELECT f.path, m.module, m.line "
+            "SELECT f.path, m.module, m.line, "
+            "       m.importing_module, m.importing_path "
             "FROM matched m JOIN files f ON f.id = m.file_id "
             "WHERE NOT EXISTS ("
             "  SELECT 1 FROM matched earlier "
@@ -193,6 +195,27 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
             (f'"{name}"', f'*"{name}[ ]*as[ ]*"*', base, base, base, base, limit),
         )
         for r in extra:
+            if r["module"].startswith("."):
+                level = len(r["module"]) - len(r["module"].lstrip("."))
+                relative_module = r["module"][level:]
+                importing_module = r["importing_module"] or ""
+                package = (
+                    importing_module
+                    if r["importing_path"].rsplit("/", 1)[-1] == "__init__.py"
+                    else importing_module.rpartition(".")[0]
+                )
+                parts = package.split(".") if package else []
+                ascents = level - 1
+                if ascents >= len(parts):
+                    resolved_base = ""
+                else:
+                    if ascents:
+                        parts = parts[:-ascents]
+                    if relative_module:
+                        parts.extend(relative_module.split("."))
+                    resolved_base = ".".join(parts)
+                if resolved_base != base:
+                    continue
             if r["path"] not in seen:
                 results.append({"path": r["path"], "module": r["module"],
                                 "line": r["line"]})
