@@ -112,6 +112,10 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
             ).fetchone()
             if row:
                 return row["id"]
+    if file["lang"] in ("javascript", "typescript"):
+        alias_target = _javascript_alias_symbol(store, file_id, callee_text)
+        if alias_target is not None:
+            return alias_target
     rows = store.conn.execute(
         "SELECT id FROM symbols WHERE file_id = ? AND name = ?", (file_id, name)
     ).fetchall()
@@ -122,9 +126,6 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     if alias_target is not None:
         return alias_target
     alias_target = _python_alias_symbol(store, file_id, callee_text)
-    if alias_target is not None:
-        return alias_target
-    alias_target = _javascript_alias_symbol(store, file_id, callee_text)
     if alias_target is not None:
         return alias_target
 

@@ -491,6 +491,7 @@ class ResolverTest(unittest.TestCase):
             (root / "app.js").write_text(
                 'import * as ns from "./one/index.js";\n'
                 'import { foo as namedFoo } from "./two/index.js";\n'
+                "function foo() { return 3; }\n"
                 "function caller() { ns.foo(); namedFoo(); }\n",
                 encoding="utf-8",
             )
@@ -521,6 +522,34 @@ class ResolverTest(unittest.TestCase):
                 self.assertEqual(
                     store.file_by_id(named_target["file_id"])["path"],
                     "two/index.js",
+                )
+            finally:
+                store.close()
+
+    def test_typescript_namespace_import_beats_local_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "one").mkdir()
+            (root / "app.ts").write_text(
+                'import * as ns from "./one/index.ts";\n'
+                "function foo() { return 3; }\n"
+                "function caller() { ns.foo(); }\n",
+                encoding="utf-8",
+            )
+            (root / "one/index.ts").write_text(
+                "export function foo() { return 1; }\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.ts")["id"]
+                target_id = resolve_callee(store, file_id, "ns.foo")
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(
+                    store.file_by_id(target["file_id"])["path"], "one/index.ts"
                 )
             finally:
                 store.close()
