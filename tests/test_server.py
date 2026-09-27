@@ -305,6 +305,29 @@ class McpServerTest(unittest.TestCase):
         replies = self._run([{"jsonrpc": "2.0", "id": 1, "method": "ping"}])
         self.assertEqual(replies[0]["result"], {})
 
+    def test_invalid_jsonrpc_ids_return_invalid_request(self):
+        invalid_ids = (False, [], {}, float("nan"), float("inf"))
+        replies = self._run([
+            {"jsonrpc": "2.0", "id": request_id, "method": "ping"}
+            for request_id in invalid_ids
+        ])
+
+        self.assertEqual(len(replies), len(invalid_ids))
+        for reply in replies:
+            self.assertIsNone(reply["id"])
+            self.assertEqual(reply["error"]["code"], -32600)
+            self.assertEqual(reply["error"]["message"], "Invalid Request")
+
+    def test_valid_jsonrpc_ids_are_echoed(self):
+        valid_ids = (None, "request", 0, 2.5)
+        replies = self._run([
+            {"jsonrpc": "2.0", "id": request_id, "method": "ping"}
+            for request_id in valid_ids
+        ])
+
+        self.assertEqual([reply["id"] for reply in replies], list(valid_ids))
+        self.assertEqual([reply["result"] for reply in replies], [{}] * 4)
+
     def test_explicit_falsey_non_object_params_are_invalid(self):
         malformed = (None, [], "", 0, False)
         messages = [
