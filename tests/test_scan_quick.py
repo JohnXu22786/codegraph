@@ -1095,6 +1095,23 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertIn(("A.counts", "System.out.println"),
                       {(c.caller, c.callee) for c in scan.calls})
 
+    def test_java_imports_support_all_line_endings(self):
+        for newline in ("\r", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                src = newline.join((
+                    "import java.util.List;",
+                    "import static java.util.Collections.emptyList;",
+                    "class A {}",
+                )) + newline
+                scan = quick.quick_scan(src, "java")
+                self.assertEqual(
+                    [(item.module, item.line) for item in scan.imports],
+                    [
+                        ("java.util.List", 1),
+                        ("java.util.Collections.emptyList", 2),
+                    ],
+                )
+
     def test_java_constructor_is_indexed_as_a_method(self):
         src = "class A { A() {} }\n"
         scan = quick.quick_scan(src, "java")

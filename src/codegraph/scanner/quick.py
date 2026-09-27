@@ -108,7 +108,8 @@ def _assign_callers(calls, recs):
 
 
 def _line_no(text, pos) -> int:
-    return text.count("\n", 0, pos) + 1
+    prefix = text[:pos]
+    return prefix.count("\n") + prefix.count("\r") - prefix.count("\r\n") + 1
 
 
 # --------------------------------------------------------------------------
@@ -1138,7 +1139,9 @@ RE_JAVA_CONSTRUCTOR = re.compile(
 # statement keywords that can never introduce a method declaration
 _JAVA_STMT_HEADS = ("new", "return", "throw", "switch", "if", "for",
                     "while", "catch", "synchronized")
-RE_JAVA_IMP = re.compile(r"^[ \t]*import\s+(?:static\s+)?([\w.*]+)\s*;", re.M)
+RE_JAVA_IMP = re.compile(
+    r"(?:\A|(?<=[\r\n]))[ \t]*import\s+(?:static\s+)?([\w.*]+)\s*;"
+)
 
 
 def _imports_java(text):
