@@ -198,6 +198,24 @@ class WalkTest(unittest.TestCase):
             found = discover_files(root, cfg)
             self.assertEqual([p.name for p in found], ["ok.py"])
 
+    def test_source_symlinks_must_resolve_within_project_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "project"
+            root.mkdir()
+            (root / "inside.py").write_text("value = 1\n", encoding="utf-8")
+            outside = base / "outside.py"
+            outside.write_text("secret = 1\n", encoding="utf-8")
+            try:
+                (root / "inside_link.py").symlink_to(root / "inside.py")
+                (root / "outside_link.py").symlink_to(outside)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"file symlinks are unavailable: {exc}")
+
+            cfg = load_config(root=str(root))
+            found = [path.as_posix() for path in discover_files(root, cfg)]
+            self.assertEqual(found, ["inside.py", "inside_link.py"])
+
 
 if __name__ == "__main__":
     unittest.main()
