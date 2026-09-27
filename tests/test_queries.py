@@ -41,6 +41,35 @@ class QueryTest(unittest.TestCase):
         got = sorted(r["qualname"] for r in rows)
         self.assertEqual(got, ["pkg.cart.Cart.total", "pkg.pricing.discount"])
 
+    def test_callers_by_ambiguous_go_qualname_return_no_partial_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            for package_dir, caller in (("a", "callA"), ("b", "callB")):
+                directory = root / package_dir
+                directory.mkdir()
+                (directory / "target.go").write_text(
+                    "package client\nfunc Target() {}\n", encoding="utf-8")
+                (directory / "caller.go").write_text(
+                    f"package client\nfunc {caller}() {{ Target() }}\n",
+                    encoding="utf-8",
+                )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                resolved = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE callee = 'Target'"
+                ).fetchall()
+                self.assertEqual(len(resolved), 2)
+                self.assertTrue(all(row["callee_id"] is not None for row in resolved))
+                self.assertEqual(query_callers(store, "client.Target"), [])
+            finally:
+                store.close()
+
     def test_callers_by_plain_name(self):
         rows = query_callers(self.store, "create_cart")
         got = sorted(r["qualname"] for r in rows)
