@@ -71,6 +71,7 @@ def discover_files(root: Path, cfg, onerror=None) -> list:
     make discovery incomplete, including errors reading file metadata.
     """
     root = Path(root)
+    root_real = root.resolve()
     max_bytes = cfg.max_file_kb * 1024
     found = []
     for dirpath, dirnames, filenames in os.walk(
@@ -93,10 +94,17 @@ def discover_files(root: Path, cfg, onerror=None) -> list:
                 continue
             full = root / rel
             try:
+                if full.is_symlink():
+                    try:
+                        full.resolve().relative_to(root_real)
+                    except ValueError:
+                        continue
                 info = full.stat()
             except OSError as exc:
                 if onerror is not None:
                     onerror(exc)
+                continue
+            except RuntimeError:
                 continue
             if not stat.S_ISREG(info.st_mode):
                 continue
