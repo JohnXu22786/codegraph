@@ -424,23 +424,33 @@ def _go_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
             ]
             if not package_files:
                 continue
-            placeholders = ",".join("?" for _ in package_files)
             members = member_path.split(".")
-            rows = store.conn.execute(
-                "SELECT id, qualname FROM symbols "
-                f"WHERE file_id IN ({placeholders}) AND name = ? ORDER BY id",
-                (*package_files, members[0]),
-            ).fetchall()
+            rows = []
+            for chunk in _id_chunks(package_files):
+                placeholders = ",".join("?" for _ in chunk)
+                rows.extend(store.conn.execute(
+                    "SELECT id, qualname FROM symbols "
+                    f"WHERE file_id IN ({placeholders}) AND name = ? "
+                    "ORDER BY id",
+                    (*chunk, members[0]),
+                ).fetchall())
+                if len(rows) > 1:
+                    break
             if len(rows) != 1:
                 continue
             symbol = rows[0]
             for member in members[1:]:
-                rows = store.conn.execute(
-                    "SELECT id, qualname FROM symbols "
-                    f"WHERE file_id IN ({placeholders}) AND parent = ? "
-                    "AND name = ? ORDER BY id",
-                    (*package_files, symbol["qualname"], member),
-                ).fetchall()
+                rows = []
+                for chunk in _id_chunks(package_files):
+                    placeholders = ",".join("?" for _ in chunk)
+                    rows.extend(store.conn.execute(
+                        "SELECT id, qualname FROM symbols "
+                        f"WHERE file_id IN ({placeholders}) AND parent = ? "
+                        "AND name = ? ORDER BY id",
+                        (*chunk, symbol["qualname"], member),
+                    ).fetchall())
+                    if len(rows) > 1:
+                        break
                 if len(rows) != 1:
                     symbol = None
                     break

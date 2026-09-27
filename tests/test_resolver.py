@@ -1068,6 +1068,53 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_go_alias_resolves_large_package_under_sqlite_variable_limit(self):
+        if not hasattr(sqlite3.Connection, "setlimit"):
+            self.skipTest("sqlite3.Connection.setlimit is unavailable")
+        limit_id = getattr(sqlite3, "SQLITE_LIMIT_VARIABLE_NUMBER", None)
+        if limit_id is None:
+            self.skipTest("SQLite variable limit constant is unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            helper = root / "helper"
+            helper.mkdir()
+            for index in range(999):
+                content = "package helper\n"
+                if index == 0:
+                    content += "func Greet() {}\n"
+                (helper / f"file{index:03}.go").write_text(
+                    content, encoding="utf-8")
+            (root / "main.go").write_text(
+                "package main\n"
+                'import h "example.com/acme/helper"\n'
+                "func caller() { h.Greet() }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                previous_limit = store.conn.setlimit(limit_id, 999)
+                try:
+                    target_id = resolve_callee(store, main_id, "h.Greet")
+                finally:
+                    store.conn.setlimit(limit_id, previous_limit)
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(target["name"], "Greet")
+                self.assertEqual(
+                    store.file_by_id(target["file_id"])["path"],
+                    "helper/file000.go",
+                )
+            finally:
+                store.close()
+
     def test_go_blank_import_does_not_shadow_same_package_method(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
