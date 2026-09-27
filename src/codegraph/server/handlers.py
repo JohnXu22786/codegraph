@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,8 +35,25 @@ class ToolContext:
             self.cache = TTLCache(ttl=30.0, max_size=128)
 
     def store(self) -> IndexStore:
-        # read-only tools must not create the database file as a side effect
-        if not Path(self.cfg.db_path).exists():
+        db_path = Path(self.cfg.db_path)
+        if not db_path.exists():
+            raise ToolError(
+                f"no index found at {self.cfg.db_path} — run 'codegraph index' "
+                f"on the project root first"
+            )
+        try:
+            check = sqlite3.connect(
+                db_path.resolve().as_uri() + "?mode=ro", uri=True
+            )
+            try:
+                indexed = check.execute(
+                    "SELECT value FROM meta WHERE key = 'last_indexed'"
+                ).fetchone()
+            finally:
+                check.close()
+        except sqlite3.Error:
+            indexed = None
+        if indexed is None or indexed[0] is None:
             raise ToolError(
                 f"no index found at {self.cfg.db_path} — run 'codegraph index' "
                 f"on the project root first"

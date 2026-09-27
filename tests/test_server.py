@@ -369,6 +369,25 @@ class McpServerTest(unittest.TestCase):
         self.assertTrue(reply["result"]["isError"])
         self.assertIn("codegraph index", reply["result"]["content"][0]["text"])
 
+    def test_readonly_query_does_not_initialize_existing_empty_database(self):
+        fresh = Path(self.tmp.name) / "empty-db"
+        fresh.mkdir()
+        cfg2 = load_config(root=str(fresh))
+        cfg2.engine = "quick"
+        db_path = Path(cfg2.db_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.write_bytes(b"")
+
+        msg = self._msg(1, "tools/call", {"name": "overview", "arguments": {}})
+        out = io.BytesIO()
+        log = io.BytesIO()
+        run_stdio(io.BytesIO(json.dumps(msg).encode("utf-8")), out, log, cfg2)
+        reply = json.loads(out.getvalue().decode("utf-8"))
+
+        self.assertTrue(reply["result"]["isError"])
+        self.assertIn("codegraph index", reply["result"]["content"][0]["text"])
+        self.assertEqual(db_path.read_bytes(), b"")
+
     def test_reindex_invalidates_query_cache(self):
         from codegraph.server.handlers import ToolContext, execute_tool
 
