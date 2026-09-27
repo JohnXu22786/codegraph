@@ -484,6 +484,46 @@ class ResolverTest(unittest.TestCase):
                 finally:
                     store.close()
 
+    def test_commonjs_namespace_member_resolves_with_duplicate_exports(self):
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "lib").mkdir()
+                    (root / "app.js").write_text(
+                        "const util = require('./lib/util.js');\n"
+                        "const other = require('./other.js');\n"
+                        "function caller() { return util.run(); }\n",
+                        encoding="utf-8",
+                    )
+                    (root / "lib" / "util.js").write_text(
+                        "function run() {}\nmodule.exports = { run };\n",
+                        encoding="utf-8",
+                    )
+                    (root / "other.js").write_text(
+                        "function run() {}\nmodule.exports = { run };\n",
+                        encoding="utf-8",
+                    )
+
+                    cfg = load_config(root=str(root))
+                    cfg.engine = engine
+                    build_index(cfg, quiet=True)
+                    store = IndexStore(str(cfg.db_path))
+                    try:
+                        app_id = store.file_by_path("app.js")["id"]
+                        target_id = resolve_callee(
+                            store, app_id, "util.run"
+                        )
+                        self.assertIsNotNone(target_id)
+                        self.assertEqual(
+                            store.file_by_id(
+                                store.symbol_by_id(target_id)["file_id"]
+                            )["path"],
+                            "lib/util.js",
+                        )
+                    finally:
+                        store.close()
+
     def test_javascript_namespace_import_resolves_own_module_exports(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
