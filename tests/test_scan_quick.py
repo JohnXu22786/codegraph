@@ -996,6 +996,18 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertEqual(names["mod-a"], ["first"])
         self.assertEqual(names["mod-b"], ["* as second"])
 
+    def test_unbound_require_does_not_inherit_previous_binding(self):
+        scan = quick.quick_scan(
+            "const { value } = require('./source'); "
+            "require('./side-effect');",
+            "javascript",
+        )
+
+        self.assertEqual(
+            [(item.module, item.names) for item in scan.imports],
+            [("./source", ["value"]), ("./side-effect", [])],
+        )
+
     def test_asi_bare_call_is_not_a_method(self):
         src = (
             "class A {\n"

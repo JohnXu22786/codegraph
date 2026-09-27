@@ -876,8 +876,7 @@ def _imports_javascript(text, jsx=False):
         names = _javascript_import_names(clause)
         imports.append(ImportRec(m.group(2), names, "import", _line_no(text, m.start())))
     imports.extend(_imports_javascript_dynamic(text, jsx=jsx))
-    # pair each require(...) with the *nearest preceding* binding statement;
-    # searching from 0 would mis-bind names in files with several requires
+    # A binding applies only to the require call matched by its declaration.
     stmts = list(RE_JS_REQ_NAMES.finditer(text))
     property_bindings = list(RE_JS_REQ_PROPERTY.finditer(text))
     for m in RE_JS_REQUIRE.finditer(text):
@@ -890,11 +889,8 @@ def _imports_javascript(text, jsx=False):
             names = [f"{source_name} as {property_binding.group(1)}"]
         stmt = None
         if not names:
-            for n in stmts:
-                if n.start() < m.start():
-                    stmt = n
-                else:
-                    break
+            stmt = next((candidate for candidate in stmts
+                         if candidate.end() - len("require") == m.start()), None)
         if stmt is not None and not names:
             names = _javascript_require_names(stmt.group(1))
             binding_prefix = text[stmt.start():stmt.start(1)]
