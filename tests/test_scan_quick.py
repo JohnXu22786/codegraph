@@ -532,6 +532,30 @@ class QuickGoJavaRustTest(unittest.TestCase):
             [("fmt", 5)],
         )
 
+    def test_go_generic_function_and_method_declarations(self):
+        src = (
+            "package demo\n"
+            "func Identity[T any](v T) T { return v }\n"
+            "func Bytes[T ~[]byte](v T) T { return v }\n"
+            "type Store[T any] struct{}\n"
+            "func (s *Store[T]) Get() T { var zero T; return zero }\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertIn(
+            ("demo.Identity", "function"),
+            {(symbol.qualname, symbol.kind) for symbol in scan.symbols},
+        )
+        self.assertIn(
+            ("demo.Bytes", "function"),
+            {(symbol.qualname, symbol.kind) for symbol in scan.symbols},
+        )
+        self.assertIn(
+            ("demo.Store.Get", "method"),
+            {(symbol.qualname, symbol.kind) for symbol in scan.symbols},
+        )
+
     def test_go_blank_and_dot_import_aliases_are_recorded(self):
         src = (
             "package main\n"

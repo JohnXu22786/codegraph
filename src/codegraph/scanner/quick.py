@@ -993,8 +993,14 @@ def _scan_javascript(text, lang, rel_path=None):
 # go
 # --------------------------------------------------------------------------
 
-RE_GO_FUNC = re.compile(r"^\s*func\s+(\w+)\s*\(([^)]*)\)")
-RE_GO_METHOD = re.compile(r"^\s*func\s+\((\w+)\s+\*?(\w+)\)\s+(\w+)\s*\(([^)]*)\)")
+RE_GO_FUNC = re.compile(
+    r"^\s*func\s+(\w+)(?:\s*\[(?:[^\[\]]|\[[^\[\]]*\])+\])?"
+    r"\s*\(([^)]*)\)"
+)
+RE_GO_METHOD = re.compile(
+    r"^\s*func\s+\((\w+)\s+\*?(\w+)"
+    r"(?:\s*\[[^\]\n]+\])?\)\s+(\w+)\s*\(([^)]*)\)"
+)
 RE_GO_TYPE = re.compile(r"^\s*type\s+(\w+)\s+(struct|interface)")
 RE_GO_IMP_SINGLE = re.compile(
     r'^[ \t]*import[ \t]+(?:(?P<alias>[\w.]+)[ \t]+)?'
