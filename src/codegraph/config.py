@@ -97,15 +97,15 @@ def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
             cfg.db_path = str(Path(cfg.root) / ".cg" / "cg.sqlite")
 
     # Shell environment overrides beat the file.
+    shell_max_file_kb = os.environ.get(ENV_PREFIX + "MAX_FILE_KB")
     if os.environ.get(ENV_PREFIX + "DB"):
         cfg.db_path = os.environ[ENV_PREFIX + "DB"]
-    if os.environ.get(ENV_PREFIX + "MAX_FILE_KB"):
-        cfg.max_file_kb = int(os.environ[ENV_PREFIX + "MAX_FILE_KB"])
     if os.environ.get(ENV_PREFIX + "ENGINE"):
         cfg.engine = os.environ[ENV_PREFIX + "ENGINE"]
 
     # DSH manifest settings override shell environment values.
     plugin_config_json = os.environ.get(ENV_PREFIX + "PLUGIN_CONFIG_JSON")
+    plugin_config = {}
     if plugin_config_json is not None:
         try:
             plugin_config = json.loads(plugin_config_json)
@@ -155,6 +155,9 @@ def load_config(root=None, config_path=None, db_path=None) -> ProjectConfig:
                         "to strings"
                     )
             setattr(cfg, key, value)
+
+    if shell_max_file_kb and "max_file_kb" not in plugin_config:
+        cfg.max_file_kb = int(shell_max_file_kb)
 
     if db_path is not None:
         cfg.db_path = db_path
