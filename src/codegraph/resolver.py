@@ -85,6 +85,8 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     if file is None:
         return None
     blocked_file_ids = set(blocked_file_ids)
+    if file["lang"] == "go":
+        blocked_file_ids.update(_go_blank_import_file_ids(store, file_id))
 
     # 1. same file: exact qualname, then unique name
     row = store.conn.execute(
@@ -249,6 +251,8 @@ def _imported_files(store: IndexStore, file_id: int):
     expanded_go_dirs = set()
     expanded_java_packages = set()
     for imp in store.imports_for_file(file_id):
+        if file["lang"] == "go" and _go_blank_import(imp):
+            continue
         if imp["target_id"]:
             out.add(imp["target_id"])
             if file["lang"] == "go":
@@ -322,6 +326,32 @@ def _names_of(imp) -> list:
 def _split_import_alias(binding: str):
     parts = re.split(r"\s+as\s+", binding.strip(), maxsplit=1)
     return parts if len(parts) == 2 else None
+
+
+def _go_blank_import(imp):
+    return imp["kind"] == "module" and any(
+        alias is not None and alias[1] == "_"
+        for alias in (_split_import_alias(binding) for binding in _names_of(imp))
+    )
+
+
+def _go_blank_import_file_ids(store: IndexStore, file_id: int):
+    file = store.file_by_id(file_id)
+    if file is None or file["lang"] != "go":
+        return set()
+    blocked = set()
+    for imp in store.imports_for_file(file_id):
+        if not _go_blank_import(imp) or not imp["target_id"]:
+            continue
+        target = store.file_by_id(imp["target_id"])
+        if target is not None and target["lang"] == "go":
+            blocked.update(
+                package_file_id
+                for package_file_id, _ in _go_package_files(
+                    store, Path(target["path"]).parent
+                )
+            )
+    return blocked
 
 
 def _go_alias_symbol(store: IndexStore, file_id: int, callee_text: str,

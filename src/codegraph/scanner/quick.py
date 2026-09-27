@@ -1003,7 +1003,7 @@ RE_GO_IMP_SPEC = re.compile(
 
 
 def _go_import_rec(module, alias, line):
-    names = [f"{module} as {alias}"] if alias and alias not in (".", "_") else []
+    names = [f"{module} as {alias}"] if alias else []
     return ImportRec(module, names, "module", line)
 
 

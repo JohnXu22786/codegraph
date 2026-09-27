@@ -301,6 +301,25 @@ class DeepGoTest(unittest.TestCase):
             [(imp.module, imp.line) for imp in deep_scan.imports], expected
         )
 
+    def test_blank_and_dot_import_aliases_are_preserved(self):
+        src = (
+            "package main\n"
+            "import (\n"
+            '    _ "example.com/acme/blank"\n'
+            '    . "example.com/acme/dot"\n'
+            ")\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.names) for imp in scan.imports],
+            [
+                ("example.com/acme/blank", ["example.com/acme/blank as _"]),
+                ("example.com/acme/dot", ["example.com/acme/dot as ."]),
+            ],
+        )
+
     def test_generic_calls_are_recorded(self):
         src = (
             "package demo\n"
