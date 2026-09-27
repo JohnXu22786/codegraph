@@ -328,11 +328,11 @@ def _imports_python_tokenized(text):
 
 
 def _imports_python(text):
-    if ";" not in text:
-        return _imports_python_heuristic(text)
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
+        if ";" not in text:
+            return _imports_python_heuristic(text)
         return _imports_python_tokenized(text)
     return _imports_from_ast(tree)
 
