@@ -319,9 +319,11 @@ class IndexStore:
         ).fetchall()
 
     def symbol_by_qualname(self, qualname):
-        return self.conn.execute(
-            "SELECT * FROM symbols WHERE qualname = ? ORDER BY id LIMIT 1", (qualname,)
-        ).fetchone()
+        rows = self.conn.execute(
+            "SELECT * FROM symbols WHERE qualname = ? ORDER BY id LIMIT 2",
+            (qualname,),
+        ).fetchall()
+        return rows[0] if len(rows) == 1 else None
 
     def symbol_by_id(self, symbol_id):
         return self.conn.execute(
