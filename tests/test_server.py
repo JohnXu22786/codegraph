@@ -69,6 +69,32 @@ class McpServerTest(unittest.TestCase):
         for t in replies[1]["result"]["tools"]:
             self.assertEqual(t["inputSchema"]["type"], "object")
 
+    def test_successful_tool_results_use_valid_content_for_supported_versions(self):
+        for version in ("2024-11-05", "2025-03-26"):
+            with self.subTest(version=version):
+                replies = self._run([
+                    self._msg(1, "initialize", {
+                        "protocolVersion": version,
+                        "capabilities": {},
+                        "clientInfo": {"name": "test", "version": "1"},
+                    }),
+                    self._msg(2, "tools/call", {
+                        "name": "overview", "arguments": {},
+                    }),
+                ])
+
+                self.assertEqual(
+                    replies[0]["result"]["protocolVersion"], version
+                )
+                result = replies[1]["result"]
+                self.assertEqual(
+                    [block["type"] for block in result["content"]],
+                    ["text", "text"],
+                )
+                self.assertEqual(
+                    json.loads(result["content"][1]["text"])["files"], 14
+                )
+
     def test_protocol_version_negotiation(self):
         replies = self._run([self._msg(1, "initialize", {
             "protocolVersion": "2030-01-01",
@@ -127,8 +153,9 @@ class McpServerTest(unittest.TestCase):
         text = result["content"][0]["text"]
         self.assertIn("pkg.pricing.discount", text)
         self.assertIn("pkg.cart.Cart.total", text)
-        # canonical JSON value carries structured rows
-        rows = result["content"][1]["json"]
+        self.assertEqual([block["type"] for block in result["content"]],
+                         ["text", "text"])
+        rows = json.loads(result["content"][1]["text"])
         self.assertEqual(len(rows), 2)
 
     def test_search_tool_and_overview(self):
@@ -137,7 +164,7 @@ class McpServerTest(unittest.TestCase):
             self._msg(2, "tools/call", {"name": "overview", "arguments": {}}),
         ])
         self.assertIn("pkg.pricing.discount", replies[0]["result"]["content"][0]["text"])
-        stats = replies[1]["result"]["content"][1]["json"]
+        stats = json.loads(replies[1]["result"]["content"][1]["text"])
         self.assertEqual(stats["files"], 14)
 
     def test_unknown_tool_is_protocol_error(self):
@@ -253,7 +280,9 @@ class McpServerTest(unittest.TestCase):
 
         result = replies[0]["result"]
         self.assertFalse(result["isError"], result)
-        self.assertEqual(result["content"][1]["json"]["files"], 14)
+        self.assertEqual(
+            json.loads(result["content"][1]["text"])["files"], 14
+        )
 
     def test_unknown_method(self):
         replies = self._run([self._msg(1, "mystery/method")])
@@ -322,7 +351,7 @@ class McpServerTest(unittest.TestCase):
         text = result["content"][0]["text"]
         self.assertIn("pkg/__init__.py", text)
         self.assertIn("(external)", text)
-        rows = result["content"][1]["json"]
+        rows = json.loads(result["content"][1]["text"])
         self.assertEqual(len(rows), 2)
 
     def test_unindexed_project_gets_friendly_error(self):
