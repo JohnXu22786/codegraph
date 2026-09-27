@@ -156,6 +156,39 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_python_unaliased_import_resolves_with_duplicate_name(self):
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "pkg").mkdir()
+                    (root / "pkg" / "a.py").write_text(
+                        "def foo():\n    return 1\n", encoding="utf-8")
+                    (root / "pkg" / "b.py").write_text(
+                        "def foo():\n    return 2\n"
+                        "def bar():\n    return 3\n",
+                        encoding="utf-8",
+                    )
+                    (root / "app.py").write_text(
+                        "from pkg.a import foo\n"
+                        "from pkg.b import bar\n"
+                        "def caller():\n    return foo()\n",
+                        encoding="utf-8",
+                    )
+
+                    cfg = load_config(root=str(root))
+                    cfg.engine = engine
+                    build_index(cfg, quiet=True)
+                    store = IndexStore(str(cfg.db_path))
+                    try:
+                        app_id = store.file_by_path("app.py")["id"]
+                        call = store.find_call(callee="foo", file_id=app_id)
+                        self.assertIsNotNone(call["callee_id"])
+                        target = store.symbol_by_id(call["callee_id"])
+                        self.assertEqual(target["qualname"], "pkg.a.foo")
+                    finally:
+                        store.close()
+
     def test_python_tab_separated_aliases_resolve_across_engines(self):
         cases = (
             {
