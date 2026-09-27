@@ -122,7 +122,9 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     if len(rows) == 1:
         return rows[0]["id"]
 
-    alias_target = _rust_alias_symbol(store, file_id, callee_text)
+    alias_target = _rust_alias_symbol(
+        store, file_id, callee_text, caller_name=caller_name
+    )
     if alias_target is not None:
         return alias_target
     alias_target = _python_alias_symbol(store, file_id, callee_text)
@@ -444,32 +446,53 @@ def _rust_inline_qualname(store: IndexStore, file_id: int, callee_text: str,
     return f"{scope}.{'.'.join(parts)}"
 
 
-def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
+def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
+                       caller_name=None):
     """Resolve a call through a Rust ``use ... as alias`` binding."""
     file = store.file_by_id(file_id)
     if file is None or file["lang"] != "rust":
         return None
     for imp in store.imports_for_file(file_id):
-        if imp["kind"] != "use" or not imp["target_id"]:
+        if imp["kind"] != "use":
             continue
         names = _names_of(imp)
         if len(names) != 1:
             continue
         alias = names[0]
         if callee_text == alias:
+            member_path = ""
             source_name = last_segment(imp["module"])
         elif callee_text.startswith(alias + "::"):
-            source_name = last_segment(callee_text[len(alias) + 2:])
+            member_path = callee_text[len(alias) + 2:]
+            source_name = last_segment(member_path)
         elif callee_text.startswith(alias + "."):
-            source_name = last_segment(callee_text[len(alias) + 1:])
+            member_path = callee_text[len(alias) + 1:]
+            source_name = last_segment(member_path)
         else:
             continue
-        rows = store.conn.execute(
-            "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
-            (imp["target_id"], source_name),
-        ).fetchall()
-        if len(rows) == 1:
-            return rows[0]["id"]
+        if imp["target_id"]:
+            rows = store.conn.execute(
+                "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
+                (imp["target_id"], source_name),
+            ).fetchall()
+            if len(rows) == 1:
+                return rows[0]["id"]
+
+        # Inline modules have no file row to use as an import target. Resolve
+        # their stable same-file qualified name instead.
+        qualname = _rust_inline_qualname(
+            store, file_id, imp["module"], caller_name
+        )
+        if qualname:
+            if member_path:
+                qualname += "." + member_path.replace("::", ".")
+            row = store.conn.execute(
+                "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
+                "ORDER BY id LIMIT 1",
+                (file_id, qualname),
+            ).fetchone()
+            if row:
+                return row["id"]
     return None
 
 

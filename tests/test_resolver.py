@@ -2292,6 +2292,36 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_inline_use_alias_resolves_across_engines(self):
+        """Aliases to inline-module items resolve without a target file."""
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "lib.rs").write_text(
+                        "mod util { pub fn helper() {} }\n"
+                        "use crate::util::helper as h;\n"
+                        "fn caller() { h(); }\n",
+                        encoding="utf-8",
+                    )
+
+                    cfg = load_config(root=str(root))
+                    cfg.engine = engine
+                    build_index(cfg, quiet=True)
+                    store = IndexStore(str(cfg.db_path))
+                    try:
+                        file_id = store.file_by_path("lib.rs")["id"]
+                        target_id = resolve_callee(store, file_id, "h")
+                        self.assertIsNotNone(target_id)
+                        self.assertEqual(
+                            store.symbol_by_id(target_id)["qualname"],
+                            "lib.util.helper",
+                        )
+                        call = store.find_call(callee="h", file_id=file_id)
+                        self.assertEqual(call["callee_id"], target_id)
+                    finally:
+                        store.close()
+
     def test_ignored_nested_cargo_manifest_does_not_hide_conventional_root(self):
         """Excluded package metadata must not change in-scope Rust roots."""
         with tempfile.TemporaryDirectory() as tmp:
