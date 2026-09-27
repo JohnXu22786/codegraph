@@ -524,6 +524,88 @@ class ResolverTest(unittest.TestCase):
                     finally:
                         store.close()
 
+    def test_unaliased_javascript_imports_resolve_with_duplicate_exports(self):
+        statements = (
+            "import { foo } from './lib/util.js';\n"
+            "import { bar } from './other.js';\n",
+            "const { foo } = require('./lib/util.js');\n"
+            "const { bar } = require('./other.js');\n",
+        )
+        for engine in ("quick", "deep", "auto"):
+            for statement in statements:
+                with self.subTest(engine=engine, statement=statement):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        root = Path(tmp)
+                        (root / "lib").mkdir()
+                        (root / "app.js").write_text(
+                            statement +
+                            "function caller() { return foo(); }\n",
+                            encoding="utf-8",
+                        )
+                        (root / "lib" / "util.js").write_text(
+                            "export function foo() {}\n",
+                            encoding="utf-8",
+                        )
+                        (root / "other.js").write_text(
+                            "export function foo() {}\n"
+                            "export function bar() {}\n",
+                            encoding="utf-8",
+                        )
+
+                        cfg = load_config(root=str(root))
+                        cfg.engine = engine
+                        build_index(cfg, quiet=True)
+                        store = IndexStore(str(cfg.db_path))
+                        try:
+                            app_id = store.file_by_path("app.js")["id"]
+                            call = store.find_call(
+                                callee="foo", file_id=app_id
+                            )
+                            self.assertIsNotNone(call["callee_id"])
+                            target = store.symbol_by_id(call["callee_id"])
+                            self.assertEqual(
+                                store.file_by_id(target["file_id"])["path"],
+                                "lib/util.js",
+                            )
+                        finally:
+                            store.close()
+
+    def test_unaliased_typescript_import_resolves_with_duplicate_exports(self):
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "app.ts").write_text(
+                        "import { foo } from './lib/util.ts';\n"
+                        "import { bar } from './other.ts';\n"
+                        "function caller() { return foo(); }\n",
+                        encoding="utf-8",
+                    )
+                    (root / "lib").mkdir()
+                    (root / "lib" / "util.ts").write_text(
+                        "export function foo() {}\n", encoding="utf-8")
+                    (root / "other.ts").write_text(
+                        "export function foo() {}\n"
+                        "export function bar() {}\n",
+                        encoding="utf-8",
+                    )
+
+                    cfg = load_config(root=str(root))
+                    cfg.engine = engine
+                    build_index(cfg, quiet=True)
+                    store = IndexStore(str(cfg.db_path))
+                    try:
+                        app_id = store.file_by_path("app.ts")["id"]
+                        call = store.find_call(callee="foo", file_id=app_id)
+                        self.assertIsNotNone(call["callee_id"])
+                        target = store.symbol_by_id(call["callee_id"])
+                        self.assertEqual(
+                            store.file_by_id(target["file_id"])["path"],
+                            "lib/util.ts",
+                        )
+                    finally:
+                        store.close()
+
     def test_javascript_namespace_import_resolves_own_module_exports(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
