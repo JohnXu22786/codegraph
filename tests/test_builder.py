@@ -104,6 +104,45 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(report.files_skipped, ALL_FILES)
         resolve.assert_not_called()
 
+    def test_go_module_path_change_rechecks_unchanged_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/old\n\ngo 1.22\n", encoding="utf-8")
+            (root / "app.go").write_text(
+                'package app\nimport "example.com/old/lib"\n'
+                "func caller() { lib.Helper() }\n",
+                encoding="utf-8",
+            )
+            (root / "lib").mkdir()
+            (root / "lib" / "lib.go").write_text(
+                "package lib\nfunc Helper() {}\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="example.com/old/lib")
+                self.assertEqual(
+                    store.file_by_id(row["target_id"])["path"], "lib/lib.go"
+                )
+            finally:
+                store.close()
+
+            (root / "go.mod").write_text(
+                "module example.com/new\n\ngo 1.22\n", encoding="utf-8")
+            report = build_index(cfg, quiet=True)
+            self.assertEqual(report.files_changed, 0)
+            self.assertEqual(report.files_skipped, 2)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                row = store.find_import(module="example.com/old/lib")
+                self.assertIsNone(row["target_id"])
+            finally:
+                store.close()
+
     def test_resolver_config_change_rechecks_unchanged_index(self):
         cfg = self._cfg()
         build_index(cfg)

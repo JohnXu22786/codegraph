@@ -94,8 +94,20 @@ def _cargo_manifest_state(root: Path, source_paths=None) -> dict:
     return state
 
 
+def _go_mod_state(root: Path, include_go=True) -> dict:
+    """Return the root go.mod digest when Go sources are indexed."""
+    manifest = Path(root).resolve() / "go.mod"
+    if not include_go or not manifest.is_file():
+        return {}
+    try:
+        digest = _digest(manifest.read_bytes())
+    except OSError:
+        digest = None
+    return {"go.mod": digest}
+
+
 def _scan_config(cfg: ProjectConfig, include_cargo=True,
-                 cargo_manifest_paths=None) -> str:
+                 cargo_manifest_paths=None, include_go=True) -> str:
     """Serialize settings that affect per-file scan payloads."""
     language_ids = set(languages.EXTENSIONS.values())
     language_ids.update(cfg.language_map.values())
@@ -120,8 +132,9 @@ def _scan_config(cfg: ProjectConfig, include_cargo=True,
         # no-source-change incremental build when a root path moves.
          "cargo_manifests": (
              _cargo_manifest_state(
-                 Path(cfg.root), cargo_manifest_paths) if include_cargo else {}
-         )},
+                  Path(cfg.root), cargo_manifest_paths) if include_cargo else {}
+          ),
+          "go_module": _go_mod_state(Path(cfg.root), include_go)},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -157,6 +170,10 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         languages.lang_for(rel.as_posix(), cfg.language_map) == "rust"
         for rel in discovered
     )
+    has_discovered_go = any(
+        languages.lang_for(rel.as_posix(), cfg.language_map) == "go"
+        for rel in discovered
+    )
 
     db = Path(cfg.db_path)
     db.parent.mkdir(parents=True, exist_ok=True)
@@ -175,6 +192,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     has_indexed_rust = store.conn.execute(
         "SELECT 1 FROM files WHERE lang = ? LIMIT 1", ("rust",)
     ).fetchone() is not None
+    has_indexed_go = store.conn.execute(
+        "SELECT 1 FROM files WHERE lang = ? LIMIT 1", ("go",)
+    ).fetchone() is not None
     rust_source_paths = [
         rel for rel in discovered
         if languages.lang_for(rel.as_posix(), cfg.language_map) == "rust"
@@ -186,7 +206,8 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     cargo_manifest_paths = _cargo_manifest_paths(root, rust_source_paths)
     scan_config = _scan_config(
         cfg, include_cargo=has_indexed_rust or has_discovered_rust,
-        cargo_manifest_paths=cargo_manifest_paths)
+        cargo_manifest_paths=cargo_manifest_paths,
+        include_go=has_indexed_go or has_discovered_go)
     store.set_meta(
         "cargo_manifest_paths",
         json.dumps([
@@ -211,6 +232,10 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     cargo_metadata_changed = (
         previous_scan_config.get("cargo_manifests") !=
         current_scan_config["cargo_manifests"]
+    )
+    go_module_changed = (
+        previous_scan_config.get("go_module") !=
+        current_scan_config["go_module"]
     )
     resolver_version_changed = (
         previous_scan_config.get("resolver_version") !=
@@ -309,7 +334,8 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
         needs_resolution = (
             changed_file_ids or recheck_call_ids or recheck_import_ids or
             changed_symbol_names or removed_file or resolution_pending or
-            cargo_metadata_changed or rust_structure_changed or
+            cargo_metadata_changed or go_module_changed or
+            rust_structure_changed or
             resolver_version_changed
         )
         if needs_resolution:
@@ -318,6 +344,7 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
             # instead of being hidden by unchanged file digests.
             store.set_meta("resolution_pending", "1")
             if (resolution_pending or cargo_metadata_changed or
+                    go_module_changed or
                     rust_structure_changed or resolver_version_changed):
                 resolve_all(store)
             else:
