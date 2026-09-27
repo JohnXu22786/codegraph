@@ -60,6 +60,15 @@ class QuickPythonTest(unittest.TestCase):
             [("os", "module", 2), ("sys", "module", 2)],
         )
 
+    def test_inline_suite_import_without_semicolon(self):
+        scan = quick.quick_scan(
+            "if enabled: import optional\n", "python"
+        )
+        self.assertEqual(
+            [(item.module, item.kind, item.line) for item in scan.imports],
+            [("optional", "module", 1)],
+        )
+
     def test_module_import_aliases_are_recorded(self):
         sources = (
             "import pkg.pricing as p\nimport other.pricing as q\n",
