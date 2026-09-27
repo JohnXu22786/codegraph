@@ -167,7 +167,7 @@ _CALLER_SCOPES = {
     "python": set(),
     "javascript": {"function_declaration", "method_definition"},
     "typescript": {"function_declaration", "method_definition"},
-    "go": set(),
+    "go": {"function_declaration"},
     "java": {"method_declaration", "constructor_declaration"},
     "rust": {"function_item"},
 }
@@ -355,6 +355,9 @@ class _Walker:
                 if t in _CONTAINERS[self.lang]:
                     self.stack.append((kind, self.items[-1][2].qualname))
                     pushed = True
+            elif self.lang == "go" and t == "method_declaration":
+                self.call_stack.append(self.items[-1][2].qualname)
+                caller_pushed = True
         if (self.lang in ("javascript", "typescript") and
                 t == "arrow_function"):
             name = self._arrow_function_name(node)

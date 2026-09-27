@@ -288,6 +288,19 @@ class DeepTypescriptTest(unittest.TestCase):
 
 @unittest.skipUnless(deep.supports("go"), "tree-sitter Go grammar not installed")
 class DeepGoTest(unittest.TestCase):
+    def test_same_line_functions_keep_call_owners(self):
+        scan = deep.deep_scan(
+            "package demo\n"
+            "func first() { firstCall() }; func second() { secondCall() }\n",
+            "go",
+            "main.go",
+        )
+
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("demo.first", "firstCall"), ("demo.second", "secondCall")},
+        )
+
     def test_import_aliases_are_preserved(self):
         src = (
             "package main\n"
