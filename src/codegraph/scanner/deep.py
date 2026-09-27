@@ -440,14 +440,11 @@ class _Walker:
             (f"{self.module}.{name}" if self.module else name)
         sig = self._signature_of(node)
         start = node.start_point[0] + 1
-        current = node.parent
+        export_parent = node.parent
         default_export = False
-        while current is not None:
-            if current.type == "export_statement":
-                prefix = _node_text(current, self.source).lstrip()
-                default_export = prefix.startswith("export default ")
-                break
-            current = current.parent
+        if export_parent is not None and export_parent.type == "export_statement":
+            prefix = _node_text(export_parent, self.source).lstrip()
+            default_export = prefix.startswith("export default ")
         rec = SymbolRec(kind, name, qual, parent, start, 0, sig, doc,
                         default_export)
         self.items.append((start, len(self.stack), rec))

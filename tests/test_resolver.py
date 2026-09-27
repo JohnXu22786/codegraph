@@ -821,6 +821,43 @@ class ResolverTest(unittest.TestCase):
                 finally:
                     store.close()
 
+    def test_javascript_default_class_import_ignores_member_exports(self):
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "app.js").write_text(
+                    "import Widget from './widget.js';\n"
+                    "function caller() { return Widget.create(); }\n",
+                    encoding="utf-8",
+                )
+                (root / "widget.js").write_text(
+                    "export default class Widget {\n"
+                    "  static create() { return 1; }\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+
+                cfg = load_config(root=str(root))
+                cfg.engine = engine
+                build_index(cfg)
+                store = IndexStore(str(cfg.db_path))
+                try:
+                    app_id = store.file_by_path("app.js")["id"]
+                    target_id = resolve_callee(store, app_id, "Widget.create")
+                    self.assertIsNotNone(target_id)
+                    self.assertEqual(
+                        store.symbol_by_id(target_id)["qualname"],
+                        "widget.Widget.create",
+                    )
+                    exported = store.conn.execute(
+                        "SELECT name FROM symbols WHERE default_export = 1 "
+                        "AND file_id = (SELECT id FROM files WHERE path = ?)",
+                        ("widget.js",),
+                    ).fetchall()
+                    self.assertEqual([row["name"] for row in exported], ["Widget"])
+                finally:
+                    store.close()
+
     def test_commonjs_property_alias_resolves_exported_function(self):
         for engine in ("quick", "deep", "auto"):
             with tempfile.TemporaryDirectory() as tmp:
