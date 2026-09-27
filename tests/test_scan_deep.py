@@ -462,6 +462,17 @@ class DeepGoTest(unittest.TestCase):
             [("demo.caller", "foo"), ("demo.caller", "make")],
         )
 
+    def test_variadic_parameters_shadow_generic_function_names(self):
+        src = (
+            "package demo\n"
+            "func callback[T any]() {}\n"
+            "func shadow(callback ...func()) { callback[0]() }\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "caller.go")
+
+        self.assertEqual(scan.calls, [])
+
     def test_local_types_and_type_parameters_shadow_generic_function_names(self):
         src = (
             "package demo\n"

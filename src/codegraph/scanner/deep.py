@@ -274,7 +274,8 @@ class _Walker:
 
     def _go_declared_names(self, node):
         if node.type in (
-            "parameter_declaration", "var_spec", "const_spec",
+            "parameter_declaration", "variadic_parameter_declaration",
+            "var_spec", "const_spec",
             "type_parameter_declaration", "type_spec", "type_alias",
         ):
             return {
