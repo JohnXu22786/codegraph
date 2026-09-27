@@ -1465,6 +1465,39 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_inline_method_call_uses_enclosing_module_scope(self):
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "lib.rs").write_text(
+                        "mod util { pub fn helper() {} }\n"
+                        "struct S;\n"
+                        "impl S {\n"
+                        "    fn caller() {\n"
+                        "        util::helper();\n"
+                        "    }\n"
+                        "}\n"
+                        "fn helper() {}\n",
+                        encoding="utf-8",
+                    )
+
+                    cfg = load_config(root=str(root))
+                    cfg.engine = engine
+                    build_index(cfg, quiet=True)
+                    store = IndexStore(str(cfg.db_path))
+                    try:
+                        file_id = store.file_by_path("lib.rs")["id"]
+                        target = store.symbol_by_qualname("lib.util.helper")
+                        call = store.find_call(
+                            callee="util::helper", file_id=file_id
+                        )
+                        self.assertIsNotNone(call)
+                        self.assertEqual(call["callee_id"], target["id"])
+                    finally:
+                        store.close()
+
+
     def test_rust_explicit_inline_module_paths_resolve_with_duplicates(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

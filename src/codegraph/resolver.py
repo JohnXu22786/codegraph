@@ -460,12 +460,14 @@ def _rust_inline_qualname(store: IndexStore, file_id: int, callee_text: str,
     scope = file["module"]
     if caller_name:
         caller = store.conn.execute(
-            "SELECT parent FROM symbols WHERE file_id = ? AND qualname = ? "
+            "SELECT parent, kind FROM symbols WHERE file_id = ? AND qualname = ? "
             "ORDER BY id LIMIT 1",
             (file_id, caller_name),
         ).fetchone()
         if caller and caller["parent"]:
             scope = caller["parent"]
+            if caller["kind"] == "method":
+                scope = caller["parent"].rpartition(".")[0] or file["module"]
     if parts[0] == "crate":
         parts = parts[1:]
         scope = file["module"]
