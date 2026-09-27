@@ -120,6 +120,20 @@ class DeepJavascriptTest(unittest.TestCase):
         by_q = {symbol.qualname: symbol for symbol in scan.symbols}
         self.assertEqual(by_q["app.first"].end, 1)
 
+    def test_arrow_function_symbol_owns_calls(self):
+        scan = deep.deep_scan(
+            "const f = () => target();\n", "javascript", "app.js"
+        )
+
+        self.assertIn(
+            ("app.f", "function"),
+            {(symbol.qualname, symbol.kind) for symbol in scan.symbols},
+        )
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("app.f", "target")],
+        )
+
     def test_dynamic_import_is_recorded_as_an_import(self):
         src = 'async function load() { return import("./lazy.js"); }'
 
@@ -193,6 +207,20 @@ class DeepTypescriptTest(unittest.TestCase):
         )
         by_q = {symbol.qualname: symbol for symbol in scan.symbols}
         self.assertEqual(by_q["app.first"].end, 1)
+
+    def test_arrow_function_symbol_owns_calls(self):
+        scan = deep.deep_scan(
+            "const f = () => target();\n", "typescript", "app.ts"
+        )
+
+        self.assertIn(
+            ("app.f", "function"),
+            {(symbol.qualname, symbol.kind) for symbol in scan.symbols},
+        )
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("app.f", "target")],
+        )
 
     def test_dynamic_import_is_recorded_as_an_import(self):
         src = 'async function load() { return import("./lazy.js"); }'
