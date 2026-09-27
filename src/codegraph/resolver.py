@@ -568,9 +568,7 @@ def _javascript_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
             continue
         for binding in _names_of(imp):
             alias = _split_import_alias(binding)
-            if alias is None:
-                continue
-            source_name, local_name = alias
+            source_name, local_name = alias or (binding.strip(), binding.strip())
             if callee_text == local_name:
                 member_path = ""
             elif callee_text.startswith(local_name + "."):
