@@ -273,6 +273,28 @@ class McpServerTest(unittest.TestCase):
         )
         build_index.assert_called_once()
 
+    def test_incomplete_incremental_reindex_is_reported_as_error(self):
+        with patch(
+            "codegraph.server.handlers.build_index",
+            return_value=SimpleNamespace(complete=False),
+        ) as build_index:
+            replies = self._run([
+                self._msg(1, "tools/call", {
+                    "name": "reindex", "arguments": {"force": False}
+                })
+            ])
+
+        result = replies[0]["result"]
+        self.assertTrue(result["isError"])
+        self.assertIn(
+            "incremental reindex incomplete", result["content"][0]["text"]
+        )
+        self.assertIn(
+            "partial changes may have been committed",
+            result["content"][0]["text"],
+        )
+        build_index.assert_called_once()
+
     def test_omitted_arguments_default_to_empty_object(self):
         replies = self._run([
             self._msg(1, "tools/call", {"name": "overview"}),

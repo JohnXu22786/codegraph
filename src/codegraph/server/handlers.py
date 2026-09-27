@@ -169,6 +169,11 @@ def _exec_reindex(args, ctx: ToolContext):
             raise ToolError(
                 "forced index rebuild incomplete; previous index was preserved"
             )
+        if not force and not report.complete:
+            raise ToolError(
+                "incremental reindex incomplete; partial changes "
+                "may have been committed"
+            )
     finally:
         # Incremental builds commit changed files as they go, so a later
         # failure can still leave the index changed and cached reads stale.
