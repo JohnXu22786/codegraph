@@ -110,7 +110,9 @@ def _dispatch(msg: dict, ctx: ToolContext, log_stream) -> "dict | None":
                 "isError": True}}
         return {"jsonrpc": "2.0", "id": msg_id, "result": {
             "content": [{"type": "text", "text": text},
-                        {"type": "json", "json": value}],
+                        {"type": "text", "text": json.dumps(
+                            value, ensure_ascii=False, separators=(",", ":")
+                        )}],
             "isError": False}}
     return _error(msg_id, -32601, f"Method not found: {method}")
 

@@ -289,7 +289,8 @@ class PythonServer {
         const text = response.content?.find((item) => item.type === 'text')?.text
         throw new Error(text || 'codegraph tool failed')
       }
-      return response.content?.find((item) => item.type === 'json')?.json ?? null
+      const data = response.content?.slice(1).find((item) => item.type === 'text')?.text
+      return typeof data === 'string' ? JSON.parse(data) : null
     })
   }
 
