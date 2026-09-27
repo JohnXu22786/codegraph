@@ -1149,6 +1149,9 @@ RE_RS_MOD = re.compile(
 RE_RS_INLINE_MOD = re.compile(
     r"^[ \t]*(?:#\[[^\]]*\]\s*)*"
     r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+((?:r#)?\w+)\s*\{")
+RE_RS_INLINE_MOD_BODY = re.compile(
+    r"(?<!\w)(?:#\[[^\]]*\]\s*)*"
+    r"(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+((?:r#)?\w+)\s*\{")
 RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)")
 RE_RS_INLINE_FN = re.compile(
     r"\b(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)"
@@ -1372,6 +1375,63 @@ def _split_rust_trailing_functions(text):
     return "\n".join(fragments) if len(fragments) > 1 else text
 
 
+def _rust_inline_function_spans(text, include_nested=False):
+    functions = []
+    position = 0
+    depth = 0
+    while position < len(text):
+        function = RE_RS_INLINE_FN.match(text, position)
+        if (include_nested or depth == 0) and function is not None:
+            opening = text.find("{", function.end())
+            if opening >= 0:
+                brace_depth = 1
+                closing = opening + 1
+                while closing < len(text) and brace_depth:
+                    if text[closing] == "{":
+                        brace_depth += 1
+                    elif text[closing] == "}":
+                        brace_depth -= 1
+                    closing += 1
+                if not brace_depth:
+                    functions.append((function, opening, closing))
+                    position = closing
+                    continue
+        if text[position] == "{":
+            depth += 1
+        elif text[position] == "}":
+            depth -= 1
+        position += 1
+    return functions
+
+
+def _rust_inline_module_spans(text):
+    modules = []
+    position = 0
+    depth = 0
+    while position < len(text):
+        module = RE_RS_INLINE_MOD_BODY.match(text, position)
+        if depth == 0 and module is not None:
+            opening = module.end() - 1
+            brace_depth = 1
+            closing = opening + 1
+            while closing < len(text) and brace_depth:
+                if text[closing] == "{":
+                    brace_depth += 1
+                elif text[closing] == "}":
+                    brace_depth -= 1
+                closing += 1
+            if not brace_depth:
+                modules.append((module, opening, closing))
+                position = closing
+                continue
+        if text[position] == "{":
+            depth += 1
+        elif text[position] == "}":
+            depth -= 1
+        position += 1
+    return modules
+
+
 def _scan_rust(text, lang, rel_path=None, parent_context=""):
     module = languages.module_of(rel_path, lang) if rel_path else ""
     lines = _rust_mask_comments(text).splitlines()
@@ -1439,31 +1499,61 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
                         ImportRec(item.module, list(item.names), item.kind, idx)
                         for item in _imports_rust(body)
                     )
-                    for fn_index, fn in enumerate(RE_RS_INLINE_FN.finditer(body)):
+
+                    def add_inline_function(scope, fn, open_brace, close_brace,
+                                            owner, symbol_depth):
                         name = fn.group(1)
-                        fn_qual = f"{qual}.{name}"
+                        fn_qual = f"{owner}.{name}"
                         inline_function_qualnames.add(fn_qual)
-                        items.append((idx, depth + fn_index + 1, SymbolRec(
-                            "function", name, fn_qual, qual, idx, 0,
+                        items.append((idx, depth + symbol_depth, SymbolRec(
+                            "function", name, fn_qual, owner, idx, 0,
                             fn.group(2).strip(),
                         )))
-                        open_brace = body.find("{", fn.end())
-                        if open_brace < 0:
-                            continue
-                        fn_depth = 1
-                        close_brace = open_brace + 1
-                        while close_brace < len(body) and fn_depth:
-                            if body[close_brace] == "{":
-                                fn_depth += 1
-                            elif body[close_brace] == "}":
-                                fn_depth -= 1
-                            close_brace += 1
-                        if fn_depth:
-                            continue
-                        fn_body = body[open_brace + 1:close_brace - 1]
+                        fn_body = scope[open_brace + 1:close_brace - 1]
+                        cursor = 0
+                        for nested_fn, nested_open, nested_close in \
+                                _rust_inline_function_spans(
+                                    fn_body, include_nested=True
+                                ):
+                            inline_calls.extend(
+                                CallRec(fn_qual, callee, idx)
+                                for callee in _calls_in_line(
+                                    fn_body[cursor:nested_fn.start()], RUST_EXCLUDE
+                                )
+                            )
+                            add_inline_function(
+                                fn_body, nested_fn, nested_open, nested_close,
+                                fn_qual, symbol_depth + 1,
+                            )
+                            cursor = nested_close
                         inline_calls.extend(
                             CallRec(fn_qual, callee, idx)
-                            for callee in _calls_in_line(fn_body, RUST_EXCLUDE)
+                            for callee in _calls_in_line(fn_body[cursor:], RUST_EXCLUDE)
+                        )
+
+                    for fn, open_brace, close_brace in \
+                            _rust_inline_function_spans(body):
+                        add_inline_function(
+                            body, fn, open_brace, close_brace, qual, 1
+                        )
+                    for nested_mod, open_brace, close_brace in \
+                            _rust_inline_module_spans(body):
+                        nested_qual = f"{qual}.{nested_mod.group(1)}"
+                        nested_scan = _scan_rust(
+                            body[open_brace + 1:close_brace - 1], lang,
+                            rel_path, parent_context=nested_qual,
+                        )
+                        trailing_symbols.extend(
+                            (idx, SymbolRec(
+                                symbol.kind, symbol.name, symbol.qualname,
+                                symbol.parent, idx, idx, symbol.signature,
+                                symbol.doc, symbol.default_export,
+                            ))
+                            for symbol in nested_scan.symbols
+                        )
+                        inline_calls.extend(
+                            CallRec(call.caller, call.callee, idx)
+                            for call in nested_scan.calls
                         )
                 trailing = line[module_close + 1:]
                 if trailing.strip():

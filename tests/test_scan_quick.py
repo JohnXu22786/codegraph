@@ -750,20 +750,58 @@ class QuickGoJavaRustTest(unittest.TestCase):
             },
         )
 
+    def test_rust_single_line_inline_module_scopes_nested_local_functions(self):
+        scan = quick.quick_scan(
+            "mod util { pub fn outer() { before(); if condition() { "
+            "fn local() { local_before(); fn deeper() { nested(); } "
+            "deeper(); local_after(); } } local(); after(); } }\n",
+            "rust",
+            "lib.rs",
+        )
+
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(
+            set(by_q),
+            {
+                "lib.util.outer",
+                "lib.util.outer.local",
+                "lib.util.outer.local.deeper",
+            },
+        )
+        self.assertEqual(by_q["lib.util.outer.local"].parent, "lib.util.outer")
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [
+                ("lib.util.outer", "before"),
+                ("lib.util.outer", "condition"),
+                ("lib.util.outer.local", "local_before"),
+                ("lib.util.outer.local.deeper", "nested"),
+                ("lib.util.outer.local", "deeper"),
+                ("lib.util.outer.local", "local_after"),
+                ("lib.util.outer", "local"),
+                ("lib.util.outer", "after"),
+            ],
+        )
+
     def test_rust_nested_inline_module_keeps_nested_qualification(self):
         scan = quick.quick_scan(
-            "mod outer { mod inner { fn f() { dep(); } } }\n",
+            "mod outer { fn sibling() { sibling_dep(); } "
+            "mod inner { fn f() { dep(); } } }\n",
             "rust",
             "lib.rs",
         )
 
         by_q = {symbol.qualname: symbol for symbol in scan.symbols}
         self.assertIn("lib.outer.inner.f", by_q)
+        self.assertIn("lib.outer.sibling", by_q)
         self.assertNotIn("lib.outer.f", by_q)
         self.assertEqual(by_q["lib.outer.inner.f"].parent, "lib.outer.inner")
         self.assertEqual(
             {(call.caller, call.callee) for call in scan.calls},
-            {("lib.outer.inner.f", "dep")},
+            {
+                ("lib.outer.sibling", "sibling_dep"),
+                ("lib.outer.inner.f", "dep"),
+            },
         )
 
     def test_rust_inline_module_keeps_trailing_top_level_function(self):
