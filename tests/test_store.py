@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from codegraph.models import FileScan, ImportRec, SymbolRec
 from codegraph.store import IndexStore
@@ -301,6 +302,53 @@ class StoreTest(unittest.TestCase):
         self.store.close()
         self.store = IndexStore(str(self.db))
         self.assertEqual(self.store.file_by_path("a.py").digest, "d1")
+
+    def test_legacy_schema_migration_checks_columns_under_write_lock(self):
+        self.store.close()
+        with sqlite3.connect(str(self.db)) as legacy:
+            legacy.execute("ALTER TABLE symbols DROP COLUMN default_export")
+
+        real_connect = sqlite3.connect
+        migration_order = []
+
+        class ConnectionProxy:
+            def __init__(self, conn):
+                object.__setattr__(self, "_conn", conn)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+            def __setattr__(self, name, value):
+                if name == "_conn":
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._conn, name, value)
+
+            def execute(self, sql, *args):
+                if sql == "BEGIN IMMEDIATE":
+                    migration_order.append(sql)
+                elif sql == "PRAGMA table_info(symbols)":
+                    migration_order.append((sql, self._conn.in_transaction))
+                return self._conn.execute(sql, *args)
+
+        with mock.patch(
+            "codegraph.store.sqlite3.connect",
+            side_effect=lambda *args, **kwargs: ConnectionProxy(
+                real_connect(*args, **kwargs)
+            ),
+        ):
+            self.store = IndexStore(str(self.db))
+
+        self.assertEqual(
+            migration_order,
+            ["BEGIN IMMEDIATE", ("PRAGMA table_info(symbols)", True)],
+        )
+        columns = {
+            row["name"] for row in self.store.conn.execute(
+                "PRAGMA table_info(symbols)"
+            )
+        }
+        self.assertIn("default_export", columns)
 
     def test_sqlite_pragmas_allow_concurrent_access(self):
         self.assertEqual(
