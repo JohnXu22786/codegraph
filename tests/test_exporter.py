@@ -115,6 +115,13 @@ class ExportTest(unittest.TestCase):
         # round-trips as JSON
         json.dumps(data)
 
+    def test_json_imports_include_member_names(self):
+        data = export_json(self.store)
+        member_import = next(
+            item for item in data["imports"] if item["module"] == "pkg"
+        )
+        self.assertEqual(member_import["names"], ["pricing"])
+
     def test_json_symbol_fields(self):
         data = export_json(self.store)
         sym = next(s for s in data["symbols"] if s["qualname"] == "pkg.pricing.price")

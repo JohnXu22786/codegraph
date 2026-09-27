@@ -85,6 +85,8 @@ class QueryTest(unittest.TestCase):
         # "from pkg import pricing" records the package import with its
         # member names; the package __init__ file is the resolved target
         self.assertIn(("pkg", "pkg/__init__.py"), got)
+        member_import = next(row for row in rows if row["module"] == "pkg")
+        self.assertEqual(member_import["names"], ["pricing"])
 
     def test_deps_by_file_path(self):
         rows = query_deps(self.store, "web/index.ts")
