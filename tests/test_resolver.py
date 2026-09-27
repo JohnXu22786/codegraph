@@ -1062,6 +1062,41 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_go_external_test_package_does_not_shadow_imported_symbol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            (root / "helper").mkdir()
+            (root / "helper/helper.go").write_text(
+                "package helper\nfunc Fetch() {}\n", encoding="utf-8")
+            (root / "helper/helper_test.go").write_text(
+                "package helper_test\nfunc Fetch() {}\n", encoding="utf-8")
+            (root / "main.go").write_text(
+                "package main\n"
+                'import h "example.com/acme/helper"\n'
+                "func caller() { h.Fetch() }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                target_id = resolve_callee(store, main_id, "h.Fetch")
+
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(target["name"], "Fetch")
+                self.assertEqual(
+                    store.file_by_id(target["file_id"])["path"],
+                    "helper/helper.go",
+                )
+            finally:
+                store.close()
+
     def test_go_raw_string_alias_resolves_imported_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

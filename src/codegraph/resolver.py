@@ -185,21 +185,22 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     return None
 
 
-def _go_package_files(store: IndexStore, package_dir: Path):
+def _go_package_files(store: IndexStore, package_dir: Path, package_module=None):
     if package_dir == Path("."):
         rows = store.conn.execute(
-            "SELECT id, path FROM files WHERE lang = 'go' ORDER BY path"
+            "SELECT id, path, module FROM files WHERE lang = 'go' ORDER BY path"
         )
     else:
         prefix = f"{package_dir.as_posix()}/"
         rows = store.conn.execute(
-            "SELECT id, path FROM files WHERE lang = 'go' "
+            "SELECT id, path, module FROM files WHERE lang = 'go' "
             "AND path >= ? AND path < ? ORDER BY path",
             (prefix, f"{package_dir.as_posix()}0"),
         )
     return [
         (row["id"], Path(row["path"])) for row in rows
         if Path(row["path"]).parent == package_dir
+        and (package_module is None or row["module"] == package_module)
     ]
 
 
@@ -307,7 +308,9 @@ def _imported_files(store: IndexStore, file_id: int):
                         out.update(
                             package_file_id
                             for package_file_id, _ in
-                            _go_package_files(store, package_dir)
+                            _go_package_files(
+                                store, package_dir, target["module"]
+                            )
                         )
             if file["lang"] == "java" and imp["module"].endswith(".*"):
                 package = imp["module"][:-2]
@@ -391,7 +394,7 @@ def _go_blank_import_file_ids(store: IndexStore, file_id: int):
             blocked.update(
                 package_file_id
                 for package_file_id, _ in _go_package_files(
-                    store, Path(target["path"]).parent
+                    store, Path(target["path"]).parent, target["module"]
                 )
             )
     return blocked
@@ -423,7 +426,7 @@ def _go_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
             package_files = [
                 package_file_id
                 for package_file_id, _ in _go_package_files(
-                    store, Path(target["path"]).parent
+                    store, Path(target["path"]).parent, target["module"]
                 )
                 if package_file_id not in blocked_file_ids
             ]
