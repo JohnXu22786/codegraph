@@ -116,6 +116,12 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
         alias_target = _javascript_alias_symbol(store, file_id, callee_text)
         if alias_target is not None:
             return alias_target
+    if file["lang"] == "java":
+        alias_target = _java_imported_class_member(
+            store, file_id, callee_text
+        )
+        if alias_target is not None:
+            return alias_target
     rows = store.conn.execute(
         "SELECT id FROM symbols WHERE file_id = ? AND name = ?", (file_id, name)
     ).fetchall()
@@ -243,6 +249,32 @@ def _java_class_files(store: IndexStore, class_names):
         if name in by_name:
             return by_name[name]
     return []
+
+
+def _java_imported_class_member(store: IndexStore, file_id: int,
+                                callee_text: str):
+    """Resolve a member call through an explicitly imported Java class."""
+    class_name, separator, member_path = callee_text.partition(".")
+    if not separator or not class_name or not member_path:
+        return None
+    for imp in store.imports_for_file(file_id):
+        if imp["kind"] != "import" or not imp["target_id"]:
+            continue
+        if imp["module"].rsplit(".", 1)[-1] != class_name:
+            continue
+        rows = store.conn.execute(
+            "SELECT id FROM symbols WHERE file_id = ? AND name = ? "
+            "AND kind IN ('class', 'interface')",
+            (imp["target_id"], class_name),
+        ).fetchall()
+        if len(rows) != 1:
+            continue
+        target = _aliased_symbol_target(
+            store, imp["target_id"], class_name, member_path
+        )
+        if target is not None:
+            return target
+    return None
 
 
 def _imported_files(store: IndexStore, file_id: int):
