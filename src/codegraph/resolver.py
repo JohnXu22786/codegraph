@@ -112,6 +112,9 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
             ).fetchone()
             if row:
                 return row["id"]
+        target = _rust_file_module_symbol(store, file_id, callee_text)
+        if target is not None:
+            return target
     if file["lang"] in ("javascript", "typescript"):
         alias_target = _javascript_alias_symbol(store, file_id, callee_text)
         if alias_target is not None:
@@ -476,6 +479,31 @@ def _rust_inline_qualname(store: IndexStore, file_id: int, callee_text: str,
     if not parts or parts[0] in ("crate", "self", "super"):
         return None
     return f"{scope}.{'.'.join(parts)}"
+
+
+def _rust_file_module_symbol(store: IndexStore, file_id: int,
+                             callee_text: str):
+    """Resolve an explicit Rust path through its file-backed module prefix."""
+    parts = callee_text.split("::")
+    if parts[0] not in ("crate", "self", "super"):
+        return None
+    for boundary in range(len(parts) - 1, 1, -1):
+        module_id = resolve_module(
+            store, file_id, "::".join(parts[:boundary]), "use"
+        )
+        if module_id is None:
+            continue
+        qualname = _rust_inline_qualname(
+            store, module_id, "::".join(parts[boundary:])
+        )
+        row = store.conn.execute(
+            "SELECT id FROM symbols WHERE file_id = ? AND qualname = ? "
+            "ORDER BY id LIMIT 1",
+            (module_id, qualname),
+        ).fetchone()
+        if row:
+            return row["id"]
+    return None
 
 
 def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
