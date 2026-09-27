@@ -993,12 +993,14 @@ RE_GO_FUNC = re.compile(r"^\s*func\s+(\w+)\s*\(([^)]*)\)")
 RE_GO_METHOD = re.compile(r"^\s*func\s+\((\w+)\s+\*?(\w+)\)\s+(\w+)\s*\(([^)]*)\)")
 RE_GO_TYPE = re.compile(r"^\s*type\s+(\w+)\s+(struct|interface)")
 RE_GO_IMP_SINGLE = re.compile(
-    r'^[ \t]*import[ \t]+(?:(?P<alias>[\w.]+)[ \t]+)?"(?P<module>[^"]+)"',
+    r'^[ \t]*import[ \t]+(?:(?P<alias>[\w.]+)[ \t]+)?'
+    r'(?:"(?P<module_quoted>[^"]+)"|`(?P<module_raw>[^`]+)`)',
     re.M,
 )
 RE_GO_IMP_BLOCK = re.compile(r"import\s*\(([^)]*)\)", re.S)
 RE_GO_IMP_SPEC = re.compile(
-    r'^[ \t]*(?:(?P<alias>[\w.]+)[ \t]+)?"(?P<module>[^"]+)"', re.M
+    r'^[ \t]*(?:(?P<alias>[\w.]+)[ \t]+)?'
+    r'(?:"(?P<module_quoted>[^"]+)"|`(?P<module_raw>[^`]+)`)', re.M
 )
 
 
@@ -1007,18 +1009,22 @@ def _go_import_rec(module, alias, line):
     return ImportRec(module, names, "module", line)
 
 
+def _go_import_module(match):
+    return match.group("module_quoted") or match.group("module_raw")
+
+
 def _imports_go(text):
     imports = []
     seen = set()
     for m in RE_GO_IMP_SINGLE.finditer(text):
-        module = m.group("module")
+        module = _go_import_module(m)
         imports.append(_go_import_rec(
             module, m.group("alias"), _line_no(text, m.start())
         ))
         seen.add(module)
     for m in RE_GO_IMP_BLOCK.finditer(text):
         for mm in RE_GO_IMP_SPEC.finditer(m.group(1)):
-            module = mm.group("module")
+            module = _go_import_module(mm)
             if module not in seen:
                 imports.append(_go_import_rec(
                     module, mm.group("alias"),

@@ -525,6 +525,27 @@ class QuickGoJavaRustTest(unittest.TestCase):
             ],
         )
 
+    def test_go_raw_string_import_paths_are_recorded(self):
+        src = (
+            "package main\n"
+            'import h `example.com/acme/helper`\n'
+            "import (\n"
+            '    `example.com/acme/other`\n'
+            '    o `example.com/acme/third`\n'
+            ")\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.names) for imp in scan.imports],
+            [
+                ("example.com/acme/helper", ["example.com/acme/helper as h"]),
+                ("example.com/acme/other", []),
+                ("example.com/acme/third", ["example.com/acme/third as o"]),
+            ],
+        )
+
     def test_go_method_and_interface(self):
         src = (
             "package svc\n\n"

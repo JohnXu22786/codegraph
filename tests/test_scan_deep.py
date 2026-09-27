@@ -320,6 +320,27 @@ class DeepGoTest(unittest.TestCase):
             ],
         )
 
+    def test_raw_string_import_paths_are_preserved(self):
+        src = (
+            "package main\n"
+            'import h `example.com/acme/helper`\n'
+            "import (\n"
+            '    `example.com/acme/other`\n'
+            '    o `example.com/acme/third`\n'
+            ")\n"
+        )
+
+        scan = deep.deep_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.names) for imp in scan.imports],
+            [
+                ("example.com/acme/helper", ["example.com/acme/helper as h"]),
+                ("example.com/acme/other", []),
+                ("example.com/acme/third", ["example.com/acme/third as o"]),
+            ],
+        )
+
     def test_generic_calls_are_recorded(self):
         src = (
             "package demo\n"
