@@ -239,6 +239,15 @@ class _Walker:
                 return _node_text(child, self.source).strip()
         return ""
 
+    def _arrow_function_name(self, node):
+        parent = node.parent
+        if parent is None or parent.type != "variable_declarator":
+            return ""
+        name = parent.child_by_field_name("name")
+        if name is None or name.type != "identifier":
+            return ""
+        return _node_text(name, self.source).strip()
+
     def _receiver_type(self, node):
         recv = node.child_by_field_name("receiver")
         if recv is None:
@@ -346,6 +355,13 @@ class _Walker:
                 if t in _CONTAINERS[self.lang]:
                     self.stack.append((kind, self.items[-1][2].qualname))
                     pushed = True
+        if (self.lang in ("javascript", "typescript") and
+                t == "arrow_function"):
+            name = self._arrow_function_name(node)
+            if name:
+                self._emit("function", name, "", node)
+                self.call_stack.append(self.items[-1][2].qualname)
+                caller_pushed = True
         if self.lang == "rust" and t == "impl_item":
             _, name, _ = self._declare(node, t, "impl")
             if name:
