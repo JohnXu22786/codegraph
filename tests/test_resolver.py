@@ -811,6 +811,41 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_go_raw_string_alias_resolves_imported_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            (root / "helper").mkdir()
+            (root / "helper/helper.go").write_text(
+                "package helper\nfunc Greet() {}\n", encoding="utf-8")
+            (root / "main.go").write_text(
+                "package main\n"
+                'import h `example.com/acme/helper`\n'
+                "func caller() { h.Greet() }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                imports = store.imports_for_file(main_id)
+                self.assertEqual(imports[0]["module"], "example.com/acme/helper")
+                target_id = resolve_callee(store, main_id, "h.Greet")
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(target["qualname"], "helper.Greet")
+                edge = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ? AND callee = ?",
+                    (main_id, "h.Greet"),
+                ).fetchone()
+                self.assertEqual(edge["callee_id"], target_id)
+            finally:
+                store.close()
+
     def test_go_blank_import_does_not_shadow_same_package_method(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
