@@ -1244,8 +1244,12 @@ RE_RS_FN = re.compile(r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)
 RE_RS_INLINE_FN = re.compile(
     r"\b(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+(\w+)\s*\(([^)]*)\)"
 )
-RE_RS_TYPE = re.compile(r"^\s*(?:pub\s+)?(struct|enum)\s+(\w+)")
-RE_RS_TRAIT = re.compile(r"^\s*(?:pub\s+)?trait\s+(\w+)")
+RE_RS_TYPE = re.compile(
+    r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?(struct|enum)\s+(\w+)"
+)
+RE_RS_TRAIT = re.compile(
+    r"^\s*(?:pub(?:\s*\([^)]*\))?\s+)?trait\s+(\w+)"
+)
 RE_RS_IMPL = re.compile(r"^\s*(?:pub\s+)?(?:unsafe\s+)?impl\b")
 RE_RS_IMPL_FOR = re.compile(r"\s+for\s+(?!<\s*')")
 RE_RS_CHAR = re.compile(

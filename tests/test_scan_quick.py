@@ -856,6 +856,22 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertEqual(by_q["Square.area"].kind, "method")
         self.assertEqual(by_q["Square.area"].parent, "Square")
 
+    def test_rust_restricted_visibility_types_and_traits(self):
+        src = (
+            "pub(crate) struct Internal;\n"
+            "pub(super) enum Parent { Variant }\n"
+            "pub(crate) trait Local {}\n"
+            "pub(super) trait ParentTrait {}\n"
+        )
+
+        scan = quick.quick_scan(src, "rust")
+
+        by_name = {symbol.name: symbol for symbol in scan.symbols}
+        self.assertEqual(by_name["Internal"].kind, "type")
+        self.assertEqual(by_name["Parent"].kind, "type")
+        self.assertEqual(by_name["Local"].kind, "interface")
+        self.assertEqual(by_name["ParentTrait"].kind, "interface")
+
     def test_rust_trait_impl_non_path_targets(self):
         src = (
             "trait LocalTrait {}\n"
