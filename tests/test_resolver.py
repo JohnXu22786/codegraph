@@ -1506,6 +1506,42 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_crate_qualified_call_resolves_file_module_with_duplicates(self):
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    src = root / "src"
+                    src.mkdir()
+                    (src / "lib.rs").write_text(
+                        "mod a;\nmod b;\n"
+                        "fn caller() { crate::a::helper(); }\n",
+                        encoding="utf-8",
+                    )
+                    (src / "a.rs").write_text(
+                        "pub fn helper() {}\n", encoding="utf-8")
+                    (src / "b.rs").write_text(
+                        "pub fn helper() {}\n", encoding="utf-8")
+
+                    cfg = load_config(root=str(root))
+                    cfg.engine = engine
+                    build_index(cfg, quiet=True)
+                    store = IndexStore(str(cfg.db_path))
+                    try:
+                        file_id = store.file_by_path("src/lib.rs")["id"]
+                        call = store.find_call(
+                            callee="crate::a::helper", file_id=file_id
+                        )
+                        self.assertIsNotNone(call)
+                        self.assertIsNotNone(call["callee_id"])
+                        target = store.symbol_by_id(call["callee_id"])
+                        self.assertEqual(
+                            store.file_by_id(target["file_id"])["path"],
+                            "src/a.rs",
+                        )
+                    finally:
+                        store.close()
+
     def test_rust_single_line_inline_module_resolves_all_functions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
