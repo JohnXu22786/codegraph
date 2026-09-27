@@ -533,6 +533,15 @@ def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
         else:
             continue
         if imp["target_id"]:
+            if member_path:
+                source_path = (
+                    f"{imp['module']}::{member_path.replace('.', '::')}"
+                )
+                target_id = _rust_file_module_symbol(
+                    store, file_id, source_path
+                )
+                if target_id is not None:
+                    return target_id
             rows = store.conn.execute(
                 "SELECT id FROM symbols WHERE file_id = ? AND name = ?",
                 (imp["target_id"], source_name),
