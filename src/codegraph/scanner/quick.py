@@ -118,17 +118,6 @@ def _line_no(text, pos) -> int:
 
 RE_PY_DEF = re.compile(r"^[ \t]*(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)[^:]*:")
 RE_PY_CLASS = re.compile(r"^[ \t]*class\s+(\w+)\s*(?:\([^)]*\))?\s*:")
-# note: [ \t] anchors (not \s) so MULTILINE matches cannot cross newlines and
-# report the line of a previous blank line
-RE_PY_IMP_START = re.compile(r"^[ \t]*import\b")
-PY_DOTTED_MODULE = r"\w+(?:\s*\.\s*\w+)*"
-RE_PY_IMP_MODULE_NAME = re.compile(PY_DOTTED_MODULE)
-RE_PY_IMP_MODULE = re.compile(
-    rf"^[ \t]*import\s+({PY_DOTTED_MODULE}(?:\s+as\s+\w+)?"
-    rf"(?:\s*,\s*{PY_DOTTED_MODULE}(?:\s+as\s+\w+)?)*)")
-RE_PY_IMP_FROM_START = re.compile(
-    r"^[ \t]*from[ \t]+([\w.]+)[ \t]+import\b"
-)
 
 
 def _python_doc(lines, header_idx):
@@ -151,84 +140,6 @@ def _python_doc(lines, header_idx):
         body += "\n" + lines[k].lstrip()
     doc = body.split(quote, 1)[0]
     return next((x.strip() for x in doc.splitlines() if x.strip()), "")
-
-
-def _imports_python_heuristic(text):
-    imports = []
-    lines = re.split(r"(?<=\n)|(?<=\r)(?!\n)", text)
-    idx = 0
-    while idx < len(lines):
-        if not RE_PY_IMP_START.match(lines[idx]):
-            idx += 1
-            continue
-        start = idx
-        statement = []
-        while idx < len(lines):
-            segment = lines[idx].rstrip("\r\n").split("#", 1)[0]
-            continued = segment.endswith("\\")
-            statement.append(segment[:-1] if continued else segment)
-            idx += 1
-            if not continued:
-                break
-        m = RE_PY_IMP_MODULE.match("".join(statement))
-        if m:
-            line = start + 1
-            for item in m.group(1).split(","):
-                item = item.strip()
-                name = RE_PY_IMP_MODULE_NAME.match(item)
-                if name:
-                    module = re.sub(r"\s+", "", name.group(0))
-                    alias = re.search(r"\s+as\s+(\w+)\s*$", item)
-                    names = [f"{module} as {alias.group(1)}"] if alias else []
-                    imports.append(ImportRec(module, names, "module", line))
-    source_lines = text.splitlines()
-    idx = 0
-    while idx < len(source_lines):
-        m = RE_PY_IMP_FROM_START.match(source_lines[idx])
-        if not m:
-            idx += 1
-            continue
-        start = idx
-        first = source_lines[idx][m.end():].split("#", 1)[0].rstrip()
-        parenthesized = first.lstrip().startswith("(")
-        depth = 0
-        parts = []
-        while idx < len(source_lines):
-            raw = source_lines[idx][m.end():] if idx == start else source_lines[idx]
-            code = raw.split("#", 1)[0].rstrip()
-            if parenthesized:
-                if code.endswith("\\"):
-                    code = code[:-1]
-                complete = False
-                for pos, char in enumerate(code):
-                    if char == "(":
-                        depth += 1
-                    elif char == ")":
-                        depth -= 1
-                        if depth == 0:
-                            code = code[:pos + 1]
-                            complete = True
-                            break
-                parts.append(code)
-                idx += 1
-                if complete:
-                    break
-            else:
-                continued = code.endswith("\\")
-                parts.append(code[:-1] if continued else code)
-                idx += 1
-                if not continued:
-                    break
-
-        names_text = "\n".join(parts).strip()
-        if parenthesized:
-            if not (names_text.startswith("(") and names_text.endswith(")")):
-                continue
-            names_text = names_text[1:-1]
-        names = [x.strip() for x in names_text.split(",") if x.strip()]
-        if names or parenthesized:
-            imports.append(ImportRec(m.group(1), names, "from", start + 1))
-    return imports
 
 
 def _imports_from_ast(tree, line_offset=0):
@@ -332,8 +243,6 @@ def _imports_python(text):
     try:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
-        if ";" not in text:
-            return _imports_python_heuristic(text)
         return _imports_python_tokenized(text)
     return _imports_from_ast(tree)
 

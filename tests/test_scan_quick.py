@@ -129,6 +129,16 @@ class QuickPythonTest(unittest.TestCase):
             [("os", [], "module", 1), ("sys", [], "module", 1)],
         )
 
+    def test_inline_import_without_semicolon_survives_syntax_error(self):
+        source = "if enabled: import optional\ndef broken(:\n"
+
+        scan = quick.quick_scan(source, "python")
+
+        self.assertEqual(
+            [(item.module, item.kind, item.line) for item in scan.imports],
+            [("optional", "module", 1)],
+        )
+
     def test_backslash_continued_comma_separated_imports(self):
         scan = quick.quick_scan("import os, \\\n    sys as system\n", "python")
         self.assertEqual(
