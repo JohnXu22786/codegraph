@@ -1247,6 +1247,47 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(jid)
         self.assertEqual(self.store.symbol_by_id(jid).qualname, "com.demo.Calc.sum")
 
+    def test_java_imported_class_member_resolves_with_duplicate_methods(self):
+        for engine in ("quick", "deep", "auto"):
+            with self.subTest(engine=engine):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "a").mkdir()
+                    (root / "b").mkdir()
+                    (root / "app").mkdir()
+                    (root / "a" / "Foo.java").write_text(
+                        "package a;\npublic class Foo {\n"
+                        "  public static void run() {}\n}\n",
+                        encoding="utf-8",
+                    )
+                    (root / "b" / "Bar.java").write_text(
+                        "package b;\npublic class Bar {\n"
+                        "  public static void run() {}\n}\n",
+                        encoding="utf-8",
+                    )
+                    (root / "app" / "Runner.java").write_text(
+                        "package app;\nimport a.Foo;\nimport b.Bar;\n"
+                        "public class Runner {\n"
+                        "  public void caller() { Foo.run(); }\n}\n",
+                        encoding="utf-8",
+                    )
+
+                    cfg = load_config(root=str(root))
+                    cfg.engine = engine
+                    build_index(cfg, quiet=True)
+                    store = IndexStore(str(cfg.db_path))
+                    try:
+                        file_id = store.file_by_path("app/Runner.java")["id"]
+                        call = store.find_call(
+                            callee="Foo.run", file_id=file_id
+                        )
+                        self.assertIsNotNone(call)
+                        self.assertIsNotNone(call["callee_id"])
+                        target = store.symbol_by_id(call["callee_id"])
+                        self.assertEqual(target["qualname"], "a.Foo.run")
+                    finally:
+                        store.close()
+
     def test_java_imports_resolve_from_source_roots(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
