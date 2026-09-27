@@ -99,15 +99,21 @@ class IndexStore:
         self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
-        symbol_columns = {
-            row["name"] for row in self.conn.execute("PRAGMA table_info(symbols)")
-        }
-        if "default_export" not in symbol_columns:
-            self.conn.execute(
-                "ALTER TABLE symbols ADD COLUMN default_export "
-                "INTEGER NOT NULL DEFAULT 0"
-            )
-        self.conn.commit()
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            symbol_columns = {
+                row["name"]
+                for row in self.conn.execute("PRAGMA table_info(symbols)")
+            }
+            if "default_export" not in symbol_columns:
+                self.conn.execute(
+                    "ALTER TABLE symbols ADD COLUMN default_export "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+            self.conn.commit()
+        except BaseException:
+            self.conn.rollback()
+            raise
 
     def close(self):
         self.conn.close()
