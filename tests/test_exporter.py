@@ -123,6 +123,110 @@ class ExportTest(unittest.TestCase):
             ["end_line", "file", "kind", "name", "parent", "qualname", "signature", "start_line"],
         )
 
+    def test_json_export_uses_one_read_snapshot(self):
+        first_file = self.store.conn.execute(
+            "SELECT path, lines FROM files ORDER BY path LIMIT 1"
+        ).fetchone()
+        first_symbol = self.store.conn.execute(
+            "SELECT s.id, s.qualname FROM symbols s JOIN files f "
+            "ON f.id = s.file_id WHERE f.path = ? ORDER BY s.id LIMIT 1",
+            (first_file["path"],),
+        ).fetchone()
+        self.assertIsNotNone(first_symbol)
+
+        writer = IndexStore(str(self.store.db_path))
+        connection = self.store.conn
+        triggered = False
+
+        class InterleavingConnection:
+            def __getattr__(self, name):
+                return getattr(connection, name)
+
+            def execute(self, sql, *args):
+                nonlocal triggered
+                if sql.startswith("SELECT path, lang, module, lines FROM files") \
+                        and not triggered:
+                    rows = connection.execute(sql, *args).fetchall()
+                    triggered = True
+                    with writer.transaction():
+                        writer.conn.execute(
+                            "UPDATE files SET lines = lines + 100 WHERE path = ?",
+                            (first_file["path"],),
+                        )
+                        writer.conn.execute(
+                            "UPDATE symbols SET qualname = ?, name = ? WHERE id = ?",
+                            ("interleaved_new_symbol", "interleaved_new_symbol",
+                             first_symbol["id"]),
+                        )
+                    return iter(rows)
+                return connection.execute(sql, *args)
+
+        self.store.conn = InterleavingConnection()
+        try:
+            data = export_json(self.store)
+        finally:
+            self.store.conn = connection
+            writer.close()
+
+        exported_file = next(
+            row for row in data["files"] if row["path"] == first_file["path"]
+        )
+        self.assertEqual(exported_file["lines"], first_file["lines"])
+        self.assertIn(
+            first_symbol["qualname"],
+            {row["qualname"] for row in data["symbols"]},
+        )
+        self.assertNotIn(
+            "interleaved_new_symbol",
+            {row["qualname"] for row in data["symbols"]},
+        )
+
+    def test_dot_export_uses_one_read_snapshot(self):
+        first_symbol = self.store.conn.execute(
+            "SELECT s.id, s.file_id, s.qualname, f.path FROM symbols s "
+            "JOIN files f ON f.id = s.file_id ORDER BY s.id LIMIT 1"
+        ).fetchone()
+        new_path = "interleaved_export_path.py"
+        writer = IndexStore(str(self.store.db_path))
+        connection = self.store.conn
+        triggered = False
+
+        class InterleavingConnection:
+            def __getattr__(self, name):
+                return getattr(connection, name)
+
+            def execute(self, sql, *args):
+                nonlocal triggered
+                if sql.startswith(
+                    "SELECT id, file_id, qualname, kind FROM symbols"
+                ) and not triggered:
+                    rows = connection.execute(sql, *args).fetchall()
+                    triggered = True
+                    with writer.transaction():
+                        writer.conn.execute(
+                            "UPDATE files SET path = ? WHERE id = ?",
+                            (new_path, first_symbol["file_id"]),
+                        )
+                        writer.conn.execute(
+                            "UPDATE symbols SET qualname = ?, name = ? WHERE id = ?",
+                            ("interleaved_new_symbol", "interleaved_new_symbol",
+                             first_symbol["id"]),
+                        )
+                    return iter(rows)
+                return connection.execute(sql, *args)
+
+        self.store.conn = InterleavingConnection()
+        try:
+            dot = export_dot(self.store)
+        finally:
+            self.store.conn = connection
+            writer.close()
+
+        self.assertIn(first_symbol["path"], dot)
+        self.assertNotIn(new_path, dot)
+        self.assertIn(first_symbol["qualname"], dot)
+        self.assertNotIn("interleaved_new_symbol", dot)
+
 
 if __name__ == "__main__":
     unittest.main()

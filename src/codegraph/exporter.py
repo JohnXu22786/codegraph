@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+from functools import wraps
+
 from .store import IndexStore
 
 
+def _consistent_snapshot(func):
+    @wraps(func)
+    def wrapped(store):
+        with store.read_snapshot():
+            return func(store)
+    return wrapped
+
+
+@_consistent_snapshot
 def export_json(store: IndexStore) -> dict:
     """Dump the whole index as one JSON-serialisable dictionary."""
     files = [dict(r) for r in store.conn.execute(
@@ -34,6 +45,7 @@ def _esc(text) -> str:
     return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
+@_consistent_snapshot
 def export_dot(store: IndexStore) -> str:
     """Render the graph as Graphviz DOT source.
 
