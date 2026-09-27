@@ -465,6 +465,25 @@ class QuickJavascriptTest(unittest.TestCase):
         self.assertEqual(by_name["use"].kind, "function")
         self.assertIn("square", [c.callee for c in scan.calls])
 
+    def test_single_space_class_methods_keep_call_ownership(self):
+        src = (
+            "topLevel();\n"
+            "class A {\n"
+            " run() { helper(); }\n"
+            "}\n"
+        )
+        for lang in ("javascript", "typescript"):
+            with self.subTest(lang=lang):
+                scan = quick.quick_scan(src, lang)
+                by_qualname = {symbol.qualname: symbol for symbol in scan.symbols}
+                calls = {(call.caller, call.callee) for call in scan.calls}
+
+                self.assertEqual(by_qualname["A.run"].kind, "method")
+                self.assertEqual(by_qualname["A.run"].parent, "A")
+                self.assertIn(("A.run", "helper"), calls)
+                self.assertNotIn(("A", "run"), calls)
+                self.assertIn(("", "topLevel"), calls)
+
 
 class QuickGoJavaRustTest(unittest.TestCase):
     def test_go(self):

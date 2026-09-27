@@ -333,7 +333,7 @@ RE_JS_TYPE = re.compile(
 # (the '{' may carry a one-line body; trailing comments are stripped first).
 # A bare statement call like `helper(x)` has no '{' and never matches.
 RE_JS_METHOD = re.compile(
-    r"^\s{2,}(?:(?:public|private|protected|static|readonly|async|get|set|"
+    r"^\s*(?:(?:public|private|protected|static|readonly|async|get|set|"
     r"abstract|override|declare)\s+)*(\w+)\s*\(([^)]*)\)[^{]*\{")
 # words that can never be method names (get/set/require are legitimate ones)
 JS_RESERVED_NAMES = {
