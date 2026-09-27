@@ -515,6 +515,23 @@ class QuickGoJavaRustTest(unittest.TestCase):
             [("example.com/acme/one", 3), ("example.com/acme/two", 4)],
         )
 
+    def test_go_import_block_ignores_parentheses_in_comments(self):
+        src = (
+            "package main\n"
+            "import (\n"
+            "    // comment with )\n"
+            "    /* and another ) */\n"
+            '    "fmt"\n'
+            ")\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual(
+            [(imp.module, imp.line) for imp in scan.imports],
+            [("fmt", 5)],
+        )
+
     def test_go_blank_and_dot_import_aliases_are_recorded(self):
         src = (
             "package main\n"
