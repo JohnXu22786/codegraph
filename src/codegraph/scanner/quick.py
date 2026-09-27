@@ -1002,7 +1002,10 @@ RE_GO_METHOD = re.compile(
     r"^\s*func\s+\((\w+)\s+\*?(\w+)"
     r"(?:\s*\[[^\]\n]+\])?\)\s+(\w+)\s*\(([^)]*)\)"
 )
-RE_GO_TYPE = re.compile(r"^\s*type\s+(\w+)\s+(struct|interface)")
+RE_GO_TYPE = re.compile(
+    r"^\s*type\s+(\w+)(?:\s*\[[^\]\n]+\])?\s+"
+    r"(?:=\s*)?([^\s{]+)"
+)
 RE_GO_IMP_SINGLE = re.compile(
     r'^[ \t]*import[ \t]+(?:(?P<alias>[\w.]+)[ \t]+)?'
     r'(?:"(?P<module_quoted>[^"]+)"|`(?P<module_raw>[^`]+)`)',

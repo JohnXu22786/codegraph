@@ -615,6 +615,23 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertEqual(by_q["svc.Store.find"].parent, "svc.Store")
         self.assertIn(("svc.Store.Find", "s.find"), {(c.caller, c.callee) for c in scan.calls})
 
+    def test_go_named_scalar_and_alias_types(self):
+        src = (
+            "package demo\n"
+            "type UserID int\n"
+            "type Alias = string\n"
+            "type Store[T any] struct{}\n"
+            "type Finder interface { Find() }\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        by_q = {symbol.qualname: symbol for symbol in scan.symbols}
+        self.assertEqual(by_q["demo.UserID"].kind, "type")
+        self.assertEqual(by_q["demo.Alias"].kind, "type")
+        self.assertEqual(by_q["demo.Store"].kind, "type")
+        self.assertEqual(by_q["demo.Finder"].kind, "interface")
+
     def test_java(self):
         scan = _scan("Calc.java")
         by_q = {s.qualname: s for s in scan.symbols}
