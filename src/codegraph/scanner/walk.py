@@ -5,9 +5,33 @@ from __future__ import annotations
 import os
 import stat
 from fnmatch import fnmatch
+from functools import lru_cache
 from pathlib import Path
 
 from .languages import lang_for
+
+
+def _glob_match(path: str, pattern: str) -> bool:
+    parts = pattern.split("/")
+    if "**" not in parts:
+        return fnmatch(path, pattern)
+    path_parts = path.split("/")
+
+    @lru_cache(maxsize=None)
+    def match(path_idx, pattern_idx):
+        if pattern_idx == len(parts):
+            return path_idx == len(path_parts)
+        if parts[pattern_idx] == "**":
+            return match(path_idx, pattern_idx + 1) or (
+                path_idx < len(path_parts) and match(path_idx + 1, pattern_idx)
+            )
+        return (
+            path_idx < len(path_parts)
+            and fnmatch(path_parts[path_idx], parts[pattern_idx])
+            and match(path_idx + 1, pattern_idx + 1)
+        )
+
+    return match(0, 0)
 
 
 def _excluded(rel: Path, cfg, is_dir: bool) -> bool:
@@ -17,7 +41,7 @@ def _excluded(rel: Path, cfg, is_dir: bool) -> bool:
             continue
         if "/" in pat:
             base = pat.rstrip("/")
-            if fnmatch(posix, pat) or posix.startswith(base + "/"):
+            if _glob_match(posix, pat) or posix.startswith(base + "/"):
                 return True
         else:
             if fnmatch(rel.name, pat) or fnmatch(posix, pat):
@@ -33,7 +57,7 @@ def _included(rel: Path, cfg) -> bool:
         if not pat:
             continue
         base = pat.rstrip("/")
-        if posix == base or posix.startswith(base + "/") or fnmatch(posix, pat):
+        if posix == base or posix.startswith(base + "/") or _glob_match(posix, pat):
             return True
     return False
 

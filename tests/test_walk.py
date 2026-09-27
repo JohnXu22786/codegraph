@@ -147,6 +147,26 @@ class WalkTest(unittest.TestCase):
         self.assertNotIn("app.py", rel)
         self.assertNotIn("main.go", rel)
 
+    def test_recursive_glob_includes_and_excludes_root_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "top.py").write_text("x = 1\n", encoding="utf-8")
+            (root / "pkg").mkdir()
+            (root / "pkg" / "nested.py").write_text(
+                "x = 2\n", encoding="utf-8"
+            )
+            cfg = load_config(root=str(root))
+            cfg.include = ["**/*.py"]
+
+            included = {
+                path.as_posix() for path in discover_files(root, cfg)
+            }
+            self.assertEqual(included, {"top.py", "pkg/nested.py"})
+
+            cfg.include = []
+            cfg.exclude = ["**/*.py"]
+            self.assertEqual(discover_files(root, cfg), [])
+
     def test_max_file_size_skip(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
