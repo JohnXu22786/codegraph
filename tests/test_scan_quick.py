@@ -848,6 +848,27 @@ class QuickGoJavaRustTest(unittest.TestCase):
             ["self::helper", "super::util::helper", "crate::util::helper"],
         )
 
+    def test_rust_local_functions_are_nested_containers(self):
+        src = (
+            "fn outer() {\n"
+            "    fn helper() {\n"
+            "        work();\n"
+            "    }\n"
+            "    helper();\n"
+            "}\n"
+        )
+
+        scan = quick.quick_scan(src, "rust", "lib.rs")
+        by_qualname = {symbol.qualname: symbol for symbol in scan.symbols}
+
+        self.assertIn("lib.outer.helper", by_qualname)
+        self.assertEqual(by_qualname["lib.outer.helper"].parent, "lib.outer")
+        self.assertEqual(by_qualname["lib.outer.helper"].end, 4)
+        self.assertEqual(
+            {(call.caller, call.callee) for call in scan.calls},
+            {("lib.outer.helper", "work"), ("lib.outer", "helper")},
+        )
+
     def test_rust_trait(self):
         src = (
             "pub trait Shape {\n"

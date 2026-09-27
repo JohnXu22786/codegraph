@@ -1377,13 +1377,21 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
     lines = _rust_mask_comments(text).splitlines()
     n = len(lines)
     depth = 0
-    containers = []  # (open_depth, kind, qualname)
+    containers = []  # (open_depth, kind, qualname[, local_function_symbol])
     items = []
     inline_calls = []
     inline_module_lines = set()
     inline_function_qualnames = set()
     trailing_symbols = []
     inline_imports = []
+    local_function_ends = []
+
+    def close_containers(current_depth, line_no):
+        while containers and current_depth <= containers[-1][0]:
+            container = containers.pop()
+            if len(container) == 4:
+                local_function_ends.append((container[3], line_no))
+
     for idx, line in enumerate(lines, start=1):
         m = RE_RS_INLINE_MOD.match(line)
         if m:
@@ -1480,8 +1488,7 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
                         for item in trailing_scan.imports
                     )
             depth += line.count("{") - line.count("}")
-            while containers and depth <= containers[-1][0]:
-                containers.pop()
+            close_containers(depth, idx)
             continue
         m = RE_RS_TYPE.match(line)
         if m:
@@ -1490,8 +1497,7 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
                 (f"{module}.{m.group(2)}" if module else m.group(2))
             items.append((idx, depth, SymbolRec("type", m.group(2), qual, parent, idx, 0, "")))
             depth += line.count("{") - line.count("}")
-            while containers and depth <= containers[-1][0]:
-                containers.pop()
+            close_containers(depth, idx)
             continue
         m = RE_RS_TRAIT.match(line)
         if m:
@@ -1502,8 +1508,7 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
             items.append((idx, depth, SymbolRec("interface", m.group(1), qual, parent, idx, 0,
                                                 "")))
             depth += line.count("{") - line.count("}")
-            while containers and depth <= containers[-1][0]:
-                containers.pop()
+            close_containers(depth, idx)
             continue
         m = RE_RS_IMPL.match(line)
         if m:
@@ -1519,26 +1524,31 @@ def _scan_rust(text, lang, rel_path=None, parent_context=""):
                 (f"{module}.{owner}" if module else owner)
             containers.append((depth, "impl", qual))
             depth += line.count("{") - line.count("}")
-            while containers and depth <= containers[-1][0]:
-                containers.pop()
+            close_containers(depth, idx)
             continue
         m = RE_RS_FN.match(line)
         if m:
             parent = containers[-1][2] if containers else parent_context
+            parent_kind = containers[-1][1] if containers else ""
             qual = f"{parent}.{m.group(1)}" if parent else \
                 (f"{module}.{m.group(1)}" if module else m.group(1))
             kind = "method" if containers and containers[-1][1] in ("impl", "trait") \
                 else "function"
-            items.append((idx, depth, SymbolRec(kind, m.group(1), qual, parent, idx, 0,
-                                                m.group(2).strip())))
+            symbol = SymbolRec(kind, m.group(1), qual, parent, idx, 0,
+                               m.group(2).strip())
+            items.append((idx, depth, symbol))
+            container = (depth, "function", qual)
+            if parent_kind == "function":
+                container += (symbol,)
+            containers.append(container)
             depth += line.count("{") - line.count("}")
-            while containers and depth <= containers[-1][0]:
-                containers.pop()
+            close_containers(depth, idx)
             continue
         depth += line.count("{") - line.count("}")
-        while containers and depth <= containers[-1][0]:
-            containers.pop()
+        close_containers(depth, idx)
     recs = _finalize(items, n)
+    for symbol, end in local_function_ends:
+        symbol.end = end
     for rec in recs:
         if rec.qualname in inline_function_qualnames:
             rec.end = rec.start
