@@ -161,10 +161,15 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     # 3. same module family (java package, go package, ts barrel files)
     if file["lang"] in ("java", "go", "javascript", "typescript"):
         rows = store.conn.execute(
-            "SELECT s.id, s.file_id FROM symbols s JOIN files f ON f.id = s.file_id "
+            "SELECT s.id, s.file_id, f.path FROM symbols s "
+            "JOIN files f ON f.id = s.file_id "
             "WHERE f.module = ? AND f.id != ? AND s.name = ?",
             (file["module"], file_id, name),
         ).fetchall()
+        if file["lang"] == "go":
+            source_dir = posixpath.dirname(file["path"])
+            rows = [row for row in rows
+                    if posixpath.dirname(row["path"]) == source_dir]
         rows = [row for row in rows if row["file_id"] not in blocked_file_ids]
         if len(rows) == 1:
             return rows[0]["id"]

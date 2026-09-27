@@ -984,6 +984,35 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(gid)
         self.assertEqual(self.store.symbol_by_id(gid).qualname, "helper.Greet")
 
+    def test_go_same_package_resolution_is_directory_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            for package_dir in ("a", "b"):
+                (root / package_dir).mkdir()
+                (root / package_dir / "target.go").write_text(
+                    "package client\nfunc Target() {}\n", encoding="utf-8")
+            (root / "a" / "caller.go").write_text(
+                "package client\nfunc caller() { Target() }\n", encoding="utf-8")
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                caller_id = store.file_by_path("a/caller.go")["id"]
+                target_id = resolve_callee(store, caller_id, "Target")
+
+                self.assertIsNotNone(target_id)
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(
+                    store.file_by_id(target["file_id"])["path"],
+                    "a/target.go",
+                )
+            finally:
+                store.close()
+
     def test_go_aliased_import_resolves_call_with_duplicate_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
