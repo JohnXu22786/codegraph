@@ -54,7 +54,8 @@ class ResolverTest(unittest.TestCase):
             root = Path(tmp)
             for package in ("pkg", "other"):
                 (root / package).mkdir()
-            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (root / "pkg" / "__init__.py").write_text(
+                "def price(x):\n    return x + 1\n", encoding="utf-8")
             (root / "pkg" / "pricing.py").write_text(
                 "def price(x):\n    return x\n", encoding="utf-8")
             (root / "other" / "pricing.py").write_text(
@@ -182,7 +183,7 @@ class ResolverTest(unittest.TestCase):
                         package = root / "pkg"
                         package.mkdir()
                         (package / "__init__.py").write_text(
-                            "", encoding="utf-8")
+                            "def price():\n    return 0\n", encoding="utf-8")
                         (package / "pricing.py").write_text(
                             "def price():\n    return 1\n", encoding="utf-8")
                         other = root / case["other_path"]
