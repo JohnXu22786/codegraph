@@ -41,24 +41,35 @@ class ToolContext:
                 f"no index found at {self.cfg.db_path} — run 'codegraph index' "
                 f"on the project root first"
             )
+        store = None
         try:
-            check = sqlite3.connect(
-                db_path.resolve().as_uri() + "?mode=ro", uri=True
-            )
-            try:
-                indexed = check.execute(
-                    "SELECT value FROM meta WHERE key = 'last_indexed'"
-                ).fetchone()
-            finally:
-                check.close()
+            store = IndexStore(self.cfg.db_path, read_only=True)
+            if store.get_meta("last_indexed") is None:
+                raise ToolError(
+                    f"no index found at {self.cfg.db_path} — run 'codegraph index' "
+                    f"on the project root first"
+                )
+            symbol_columns = {
+                row["name"]
+                for row in store.conn.execute("PRAGMA table_info(symbols)")
+            }
+            if "default_export" not in symbol_columns:
+                raise ToolError(
+                    f"index schema is outdated at {self.cfg.db_path}; "
+                    "run 'codegraph reindex' to update it"
+                )
+            return store
+        except ToolError:
+            if store is not None:
+                store.close()
+            raise
         except sqlite3.Error:
-            indexed = None
-        if indexed is None or indexed[0] is None:
+            if store is not None:
+                store.close()
             raise ToolError(
                 f"no index found at {self.cfg.db_path} — run 'codegraph index' "
                 f"on the project root first"
-            )
-        return IndexStore(self.cfg.db_path)
+            ) from None
 
     def require_indexed(self, store: IndexStore):
         if store.get_meta("last_indexed") is None:

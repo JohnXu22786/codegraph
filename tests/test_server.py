@@ -2,7 +2,10 @@
 
 import io
 import json
+import os
 import shutil
+import sqlite3
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -432,6 +435,76 @@ class McpServerTest(unittest.TestCase):
         self.assertTrue(reply["result"]["isError"])
         self.assertIn("codegraph index", reply["result"]["content"][0]["text"])
         self.assertEqual(db_path.read_bytes(), b"")
+
+    @unittest.skipUnless(os.name == "posix", "requires POSIX file permissions")
+    def test_readonly_query_opens_index_without_directory_write_access(self):
+        from codegraph.server.handlers import ToolContext
+
+        db_path = Path(self.cfg.db_path)
+        directory_mode = stat.S_IMODE(db_path.parent.stat().st_mode)
+        file_modes = {
+            path: stat.S_IMODE(path.stat().st_mode)
+            for path in (
+                db_path,
+                Path(f"{db_path}-wal"),
+                Path(f"{db_path}-shm"),
+            )
+            if path.exists()
+        }
+        try:
+            for sidecar in (Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
+                if sidecar.exists():
+                    sidecar.chmod(0o444)
+            db_path.chmod(0o444)
+            db_path.parent.chmod(0o555)
+
+            replies = self._run([
+                self._msg(1, "tools/call", {
+                    "name": "overview", "arguments": {},
+                })
+            ])
+            self.assertFalse(replies[0]["result"]["isError"], replies[0])
+
+            store = ToolContext(self.cfg).store()
+            try:
+                self.assertIsNotNone(store.get_meta("last_indexed"))
+                self.assertEqual(
+                    store.conn.execute("PRAGMA query_only").fetchone()[0], 1
+                )
+                with self.assertRaises(sqlite3.OperationalError):
+                    store.conn.execute(
+                        "INSERT INTO meta(key, value) VALUES('test', 'value')"
+                    )
+            finally:
+                store.close()
+        finally:
+            db_path.parent.chmod(directory_mode)
+            for path, mode in file_modes.items():
+                if path.exists():
+                    path.chmod(mode)
+
+    def test_readonly_query_does_not_migrate_legacy_index_schema(self):
+        from codegraph.server.handlers import ToolContext, ToolError
+
+        db_path = Path(self.cfg.db_path)
+        legacy = sqlite3.connect(str(db_path))
+        try:
+            legacy.execute("ALTER TABLE symbols DROP COLUMN default_export")
+        finally:
+            legacy.close()
+
+        with self.assertRaisesRegex(ToolError, "index schema is outdated"):
+            ToolContext(self.cfg).store()
+
+        legacy = sqlite3.connect(str(db_path))
+        try:
+            columns = {
+                row[1]
+                for row in legacy.execute("PRAGMA table_info(symbols)")
+            }
+        finally:
+            legacy.close()
+        self.assertNotIn("default_export", columns)
 
     def test_reindex_invalidates_query_cache(self):
         from codegraph.server.handlers import ToolContext, execute_tool
