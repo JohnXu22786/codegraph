@@ -1001,7 +1001,7 @@ RE_GO_IMP_SINGLE = re.compile(
     r'(?:"(?P<module_quoted>[^"]+)"|`(?P<module_raw>[^`]+)`)',
     re.M,
 )
-RE_GO_IMP_BLOCK = re.compile(r"import\s*\(([^)]*)\)", re.S)
+RE_GO_IMP_BLOCK_START = re.compile(r"import\s*\(")
 RE_GO_IMP_SPEC = re.compile(
     r'^[ \t]*(?:(?P<alias>[\w.]+)[ \t]+)?'
     r'(?:"(?P<module_quoted>[^"]+)"|`(?P<module_raw>[^`]+)`)', re.M
@@ -1017,6 +1017,35 @@ def _go_import_module(match):
     return match.group("module_quoted") or match.group("module_raw")
 
 
+def _go_import_block_ranges(text):
+    for block_match in RE_GO_IMP_BLOCK_START.finditer(text):
+        body_start = block_match.end()
+        i = body_start
+        while i < len(text):
+            if text.startswith("//", i):
+                newline = text.find("\n", i + 2)
+                i = len(text) if newline < 0 else newline + 1
+            elif text.startswith("/*", i):
+                end = text.find("*/", i + 2)
+                i = len(text) if end < 0 else end + 2
+            elif text[i] in ('"', "'", "`"):
+                quote = text[i]
+                i += 1
+                while i < len(text):
+                    if text[i] == "\\" and quote != "`":
+                        i += 2
+                    elif text[i] == quote:
+                        i += 1
+                        break
+                    else:
+                        i += 1
+            elif text[i] == ")":
+                yield body_start, i
+                break
+            else:
+                i += 1
+
+
 def _imports_go(text):
     imports = []
     seen = set()
@@ -1026,13 +1055,14 @@ def _imports_go(text):
             module, m.group("alias"), _line_no(text, m.start())
         ))
         seen.add(module)
-    for m in RE_GO_IMP_BLOCK.finditer(text):
-        for mm in RE_GO_IMP_SPEC.finditer(m.group(1)):
+    for body_start, body_end in _go_import_block_ranges(text):
+        block = text[body_start:body_end]
+        for mm in RE_GO_IMP_SPEC.finditer(block):
             module = _go_import_module(mm)
             if module not in seen:
                 imports.append(_go_import_rec(
                     module, mm.group("alias"),
-                    _line_no(text, m.start(1) + mm.start()),
+                    _line_no(text, body_start + mm.start()),
                 ))
                 seen.add(module)
     return imports
