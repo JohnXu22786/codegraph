@@ -229,7 +229,7 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
                 results.append({"path": r["path"], "module": r["module"],
                                 "line": r["line"]})
                 seen.add(r["path"])
-    # the member-import pass appends past the first LIMIT; cap the union
+    results.sort(key=lambda row: (row["path"], row["line"]))
     return results[:limit]
 
 
