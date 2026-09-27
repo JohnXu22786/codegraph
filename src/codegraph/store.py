@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 from .models import FileScan
 
@@ -89,31 +91,66 @@ class _Row(sqlite3.Row):
 class IndexStore:
     """Thin persistence layer over a single SQLite database file."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, read_only: bool = False):
         self.db_path = str(db_path)
-        self.conn = sqlite3.connect(self.db_path, timeout=5.0)
+        if read_only:
+            resolved_path = Path(self.db_path).resolve()
+            uri = resolved_path.as_uri() + "?mode=ro"
+            connection = None
+            try:
+                connection = sqlite3.connect(uri, uri=True, timeout=5.0)
+                connection.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+            except sqlite3.OperationalError:
+                if connection is not None:
+                    connection.close()
+                db_dir = resolved_path.parent
+                if os.access(db_dir, os.W_OK):
+                    raise
+                # Immutable mode is safe only when SQLite has no pending journal.
+                for suffix in ("-wal", "-journal"):
+                    try:
+                        has_pending_writes = Path(
+                            f"{resolved_path}{suffix}"
+                        ).stat().st_size > 0
+                    except FileNotFoundError:
+                        has_pending_writes = False
+                    if has_pending_writes:
+                        raise
+                immutable_uri = (
+                    resolved_path.as_uri() + "?mode=ro&immutable=1"
+                )
+                self.conn = sqlite3.connect(
+                    immutable_uri, uri=True, timeout=5.0
+                )
+            else:
+                self.conn = connection
+        else:
+            self.conn = sqlite3.connect(self.db_path, timeout=5.0)
         self.conn.row_factory = _Row
         self.conn.isolation_level = None  # autocommit; explicit BEGIN in transaction()
         self.conn.execute("PRAGMA busy_timeout = 5000")
-        self.conn.execute("PRAGMA journal_mode = WAL")
-        self.conn.execute("PRAGMA synchronous = NORMAL")
         self.conn.execute("PRAGMA foreign_keys = ON")
-        self.conn.executescript(_SCHEMA)
-        self.conn.execute("BEGIN IMMEDIATE")
-        try:
-            symbol_columns = {
-                row["name"]
-                for row in self.conn.execute("PRAGMA table_info(symbols)")
-            }
-            if "default_export" not in symbol_columns:
-                self.conn.execute(
-                    "ALTER TABLE symbols ADD COLUMN default_export "
-                    "INTEGER NOT NULL DEFAULT 0"
-                )
-            self.conn.commit()
-        except BaseException:
-            self.conn.rollback()
-            raise
+        if read_only:
+            self.conn.execute("PRAGMA query_only = ON")
+        else:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")
+            self.conn.executescript(_SCHEMA)
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                symbol_columns = {
+                    row["name"]
+                    for row in self.conn.execute("PRAGMA table_info(symbols)")
+                }
+                if "default_export" not in symbol_columns:
+                    self.conn.execute(
+                        "ALTER TABLE symbols ADD COLUMN default_export "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                self.conn.commit()
+            except BaseException:
+                self.conn.rollback()
+                raise
 
     def close(self):
         self.conn.close()
