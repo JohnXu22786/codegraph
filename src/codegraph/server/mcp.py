@@ -9,6 +9,7 @@ so any harness that spawns a subprocess tool server can talk to it.
 from __future__ import annotations
 
 import json
+import math
 
 from .. import __version__
 from .handlers import ToolContext, ToolError, execute_tool, tool_definitions
@@ -39,6 +40,16 @@ def _send(output_stream, payload: dict):
 def _error(msg_id, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": msg_id,
             "error": {"code": code, "message": message}}
+
+
+def _valid_jsonrpc_id(value):
+    if value is None or isinstance(value, str):
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    return isinstance(value, float) and math.isfinite(value)
 
 
 def _dispatch(msg: dict, ctx: ToolContext, log_stream) -> "dict | None":
@@ -134,6 +145,10 @@ def run_stdio(input_stream, output_stream, log_stream, cfg):
         except (ValueError, UnicodeDecodeError) as exc:
             _log(log_stream, f"invalid JSON-RPC message: {exc}")
             _send(output_stream, _error(None, -32700, "Parse error"))
+            continue
+        if (isinstance(msg, dict) and "id" in msg
+                and not _valid_jsonrpc_id(msg["id"])):
+            _send(output_stream, _error(None, -32600, "Invalid Request"))
             continue
         if (
             not isinstance(msg, dict)
