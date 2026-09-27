@@ -100,6 +100,28 @@ class DeepPythonTest(unittest.TestCase):
 
 @unittest.skipUnless(deep.supports("javascript"), "tree-sitter JavaScript grammar not installed")
 class DeepJavascriptTest(unittest.TestCase):
+    def test_optional_chain_calls_keep_full_callee(self):
+        src = (
+            "function caller(client) {\n"
+            "  client?.send();\n"
+            "  client.send?.();\n"
+            "  client?.api.send();\n"
+            "  client?.api?.send?.();\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "javascript", "app.js")
+
+        self.assertEqual(
+            sorted((call.caller, call.callee) for call in scan.calls),
+            [
+                ("app.caller", "client.api.send"),
+                ("app.caller", "client.api.send"),
+                ("app.caller", "client.send"),
+                ("app.caller", "client.send"),
+            ],
+        )
+
     def test_same_line_functions_and_methods_keep_call_owners(self):
         src = (
             "function first() { x(); } function second() { y(); }\n"
@@ -196,6 +218,28 @@ class DeepJavascriptTest(unittest.TestCase):
     deep.supports("typescript"), "tree-sitter TypeScript grammar not installed"
 )
 class DeepTypescriptTest(unittest.TestCase):
+    def test_optional_chain_calls_keep_full_callee(self):
+        src = (
+            "function caller(client: Client) {\n"
+            "  client?.send();\n"
+            "  client.send?.();\n"
+            "  client?.api.send();\n"
+            "  client?.api?.send?.();\n"
+            "}\n"
+        )
+
+        scan = deep.deep_scan(src, "typescript", "app.ts")
+
+        self.assertEqual(
+            sorted((call.caller, call.callee) for call in scan.calls),
+            [
+                ("app.caller", "client.api.send"),
+                ("app.caller", "client.api.send"),
+                ("app.caller", "client.send"),
+                ("app.caller", "client.send"),
+            ],
+        )
+
     def test_same_line_functions_keep_call_owners(self):
         src = "function first() { x(); } function second() { y(); }"
 

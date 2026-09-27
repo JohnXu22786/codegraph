@@ -475,6 +475,8 @@ class _Walker:
     def _record_call(self, node):
         text = _node_text(node, self.source)
         cut = text.split("(", 1)[0]
+        if self.lang in ("javascript", "typescript"):
+            cut = cut.replace("?.", ".").rstrip(".")
         function = node.child_by_field_name("function")
         if self.lang == "typescript" and function is not None \
                 and node.child_by_field_name("type_arguments") is not None:
