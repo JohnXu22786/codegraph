@@ -234,6 +234,20 @@ class LoadConfigTest(unittest.TestCase):
         self.assertEqual(cfg.language_map, {".custom": "python"})
         self.assertEqual(explicit_cfg.db_path, str(explicit_db_path.resolve()))
 
+    def test_plugin_max_file_kb_overrides_malformed_shell_value(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "CODEGRAPH_MAX_FILE_KB": "not-an-integer",
+                "CODEGRAPH_PLUGIN_CONFIG_JSON": json.dumps(
+                    {"max_file_kb": 64}
+                ),
+            },
+        ):
+            cfg = load_config(root=str(self.root))
+
+        self.assertEqual(cfg.max_file_kb, 64)
+
     def test_plugin_config_json_rejects_invalid_payloads(self):
         cases = (
             ("{", "must contain valid JSON"),
