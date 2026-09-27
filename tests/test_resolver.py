@@ -2595,6 +2595,44 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_rust_module_alias_preserves_nested_member_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src"
+            (src / "a").mkdir(parents=True)
+            (src / "lib.rs").write_text(
+                "mod a;\n"
+                "use crate::a as A;\n"
+                "fn caller() { A::nested::helper(); }\n",
+                encoding="utf-8",
+            )
+            (src / "a.rs").write_text(
+                "pub mod nested;\n"
+                "pub fn helper() {}\n",
+                encoding="utf-8",
+            )
+            (src / "a" / "nested.rs").write_text(
+                "pub fn helper() {}\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("src/lib.rs")["id"]
+                target_id = resolve_callee(
+                    store, file_id, "A::nested::helper"
+                )
+                target = store.symbol_by_id(target_id)
+                self.assertEqual(
+                    store.file_by_id(target["file_id"])["path"],
+                    "src/a/nested.rs",
+                )
+            finally:
+                store.close()
+
     def test_rust_inline_use_alias_resolves_across_engines(self):
         """Aliases to inline-module items resolve without a target file."""
         for engine in ("quick", "deep", "auto"):
