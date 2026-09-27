@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from functools import wraps
 
@@ -121,8 +122,16 @@ def query_deps(store: IndexStore, module: str, limit: int = 200):
             "ORDER BY i.file_id, i.line LIMIT ?",
             chunk + [remaining],
         ))
-    return [{"module": r["module"], "kind": r["kind"],
-             "target_path": r["target_path"] or "", "line": r["line"]} for r in rows]
+    return [
+        {
+            "module": r["module"],
+            "names": json.loads(r["names"] or "[]"),
+            "kind": r["kind"],
+            "target_path": r["target_path"] or "",
+            "line": r["line"],
+        }
+        for r in rows
+    ]
 
 
 @_consistent_snapshot

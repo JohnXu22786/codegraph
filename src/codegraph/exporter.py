@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from functools import wraps
 
 from .store import IndexStore
@@ -29,9 +30,12 @@ def export_json(store: IndexStore) -> dict:
         "f.path AS file FROM calls c JOIN files f ON f.id = c.file_id "
         "ORDER BY f.path, c.line")]
     imports = [dict(r) for r in store.conn.execute(
-        "SELECT i.module, i.kind, i.line, f.path AS file, t.path AS target_path "
+        "SELECT i.module, i.names, i.kind, i.line, f.path AS file, "
+        "t.path AS target_path "
         "FROM imports i JOIN files f ON f.id = i.file_id "
         "LEFT JOIN files t ON t.id = i.target_id ORDER BY f.path, i.line")]
+    for item in imports:
+        item["names"] = json.loads(item["names"] or "[]")
     meta = {
         "root": store.get_meta("root", ""),
         "last_indexed": store.get_meta("last_indexed"),
