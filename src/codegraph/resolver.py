@@ -538,6 +538,21 @@ def _python_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
             target = _aliased_symbol_target(
                 store, imp["target_id"], source_name, member_path
             )
+            if target is None and member_path:
+                module = imp["module"]
+                submodule = (
+                    f"{module}{source_name}"
+                    if module.endswith(".")
+                    else f"{module}.{source_name}"
+                )
+                submodule_id = resolve_module(
+                    store, file_id, submodule, imp["kind"]
+                )
+                if submodule_id is not None:
+                    member_name, _, nested_path = member_path.partition(".")
+                    target = _aliased_symbol_target(
+                        store, submodule_id, member_name, nested_path
+                    )
             if target is not None:
                 return target
     return None
