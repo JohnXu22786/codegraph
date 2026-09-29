@@ -240,6 +240,7 @@ class _Walker:
         self.stack = []  # (kind, qualname) of open containers
         self.call_stack = []  # qualified names of active callable declarations
         self.items = []  # (start, depth, SymbolRec)
+        self.exact_ends = []  # (SymbolRec, end line) for syntax-bounded symbols
         self.raw_calls = []  # (callee, line, caller, python_header_call)
         self.imports = []
 
@@ -493,6 +494,8 @@ class _Walker:
         rec = SymbolRec(kind, name, qual, parent, start, 0, sig, doc,
                         default_export)
         self.items.append((start, len(self.stack), rec))
+        if self.lang in ("javascript", "typescript") and kind == "class":
+            self.exact_ends.append((rec, node.end_point[0] + 1))
 
     def _require_imports(self, node, text):
         imports = _imports_javascript(text)
@@ -616,6 +619,8 @@ def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
         walker.walk(child)
 
     recs = _finalize(walker.items, len(lines))
+    for rec, end in walker.exact_ends:
+        rec.end = end
     if lang in ("rust", "javascript", "typescript", "java", "go"):
         for rec in recs:
             rec.end = max(rec.start, rec.end)
