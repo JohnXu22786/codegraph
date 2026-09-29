@@ -1,6 +1,7 @@
 """Tests for incremental index building (builder.build_index)."""
 
 import json
+import multiprocessing
 import shutil
 import tempfile
 import threading
@@ -16,6 +17,21 @@ from codegraph.store import IndexStore
 from .fixtures import PROJ
 
 ALL_FILES = 14  # files under fixtures/proj recognised as source code
+
+
+def _force_build_paused_before_publish(cfg, publish_ready, allow_publish):
+    from codegraph import builder
+
+    original_replace = builder.os.replace
+
+    def pause_before_replace(source, destination):
+        publish_ready.set()
+        if not allow_publish.wait(10):
+            raise TimeoutError("forced build publication was not released")
+        original_replace(source, destination)
+
+    with patch("codegraph.builder.os.replace", side_effect=pause_before_replace):
+        build_index(cfg, force=True, quiet=True)
 
 
 class BuilderTest(unittest.TestCase):
@@ -913,6 +929,71 @@ class BuilderTest(unittest.TestCase):
                 self.assertIsNone(
                     store.symbol_by_qualname("module.force_snapshot")
                 )
+            finally:
+                store.close()
+
+    def test_force_rebuild_cannot_overwrite_incremental_update_in_another_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "sample.py"
+            source.write_text("def before():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+
+            context = multiprocessing.get_context("spawn")
+            publish_ready = context.Event()
+            allow_publish = context.Event()
+            force_process = context.Process(
+                target=_force_build_paused_before_publish,
+                args=(cfg, publish_ready, allow_publish),
+            )
+            incremental_started = threading.Event()
+            incremental_finished = threading.Event()
+            incremental_errors = []
+
+            def run_incremental():
+                incremental_started.set()
+                try:
+                    build_index(cfg, quiet=True)
+                except Exception as exc:
+                    incremental_errors.append(exc)
+                finally:
+                    incremental_finished.set()
+
+            incremental_thread = None
+            force_process.start()
+            try:
+                self.assertTrue(publish_ready.wait(5))
+                source.write_text(
+                    "def after():\n    return 2\n", encoding="utf-8")
+                incremental_thread = threading.Thread(target=run_incremental)
+                incremental_thread.start()
+                self.assertTrue(incremental_started.wait(5))
+                incremental_finished_while_publish_paused = incremental_finished.wait(0.2)
+            finally:
+                allow_publish.set()
+                force_process.join(10)
+                if force_process.is_alive():
+                    force_process.terminate()
+                    force_process.join(5)
+                if incremental_thread is not None:
+                    incremental_thread.join(10)
+
+            self.assertEqual(force_process.exitcode, 0)
+            self.assertIsNotNone(incremental_thread)
+            self.assertFalse(incremental_thread.is_alive())
+            self.assertEqual(incremental_errors, [])
+            self.assertFalse(
+                incremental_finished_while_publish_paused,
+                "incremental build committed while the older forced build "
+                "was waiting to publish",
+            )
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(store.symbol_by_qualname("sample.after"))
+                self.assertIsNone(store.symbol_by_qualname("sample.before"))
             finally:
                 store.close()
 
