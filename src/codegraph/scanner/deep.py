@@ -201,6 +201,21 @@ def _node_text(node, source: bytes) -> str:
     return source[start:end].decode("utf-8", "replace")
 
 
+def _js_pattern_binds(node, name, source):
+    if node is None:
+        return False
+    if node.type in ("identifier", "shorthand_property_identifier_pattern"):
+        return _node_text(node, source).strip() == name
+    if node.type in ("type_annotation", "type_arguments", "type_parameters"):
+        return False
+    if node.type == "assignment_pattern":
+        return _js_pattern_binds(node.child_by_field_name("left"), name, source)
+    if node.type == "pair_pattern":
+        return _js_pattern_binds(node.child_by_field_name("value"), name, source)
+    return any(_js_pattern_binds(child, name, source)
+               for child in node.named_children)
+
+
 def _go_generic_function_names(node, source: bytes) -> set[str]:
     names = set()
     for child in node.children:
@@ -310,6 +325,22 @@ class _Walker:
 
     def _go_name_is_bound(self, name):
         return any(name in scope for scope in self.go_name_scopes)
+
+    def _js_name_is_parameter(self, name, node):
+        callable_types = {
+            "function_declaration", "function_expression",
+            "generator_function_declaration", "generator_function",
+            "arrow_function", "method_definition",
+        }
+        current = node.parent
+        while current is not None:
+            if current.type in callable_types:
+                for field in ("parameters", "parameter"):
+                    params = current.child_by_field_name(field)
+                    if _js_pattern_binds(params, name, self.source):
+                        return True
+            current = current.parent
+        return False
 
     def _signature_of(self, node):
         for field in ("parameters", "formal_parameters"):
@@ -531,9 +562,15 @@ class _Walker:
                 and function.type == "identifier"
                 and _node_text(function, self.source) == "require"
             ):
-                for imp in self._require_imports(node, text):
-                    imp.line = node.start_point[0] + 1
-                    self.imports.append(imp)
+                if self._js_name_is_parameter("require", node):
+                    caller = self.call_stack[-1] if self.call_stack else ""
+                    self.raw_calls.append((
+                        callee, node.start_point[0] + 1, caller, False
+                    ))
+                else:
+                    for imp in self._require_imports(node, text):
+                        imp.line = node.start_point[0] + 1
+                        self.imports.append(imp)
             return
         if head == "import" and self.lang in ("javascript", "typescript"):
             if function is not None and function.type == "import":
