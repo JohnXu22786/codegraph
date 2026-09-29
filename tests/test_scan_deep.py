@@ -393,6 +393,7 @@ class DeepGoTest(unittest.TestCase):
             {(call.caller, call.callee) for call in scan.calls},
             {("demo.first", "firstCall"), ("demo.second", "secondCall")},
         )
+        self.assertTrue(all(symbol.end >= symbol.start for symbol in scan.symbols))
 
     def test_import_aliases_are_preserved(self):
         src = (
