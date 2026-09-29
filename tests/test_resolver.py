@@ -121,6 +121,51 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_python_function_local_aliases_resolve_in_caller_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for module in ("module_target", "first", "second"):
+                (root / f"{module}.py").write_text(
+                    "def run():\n    return None\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "from module_target import run as task\n"
+                "task()\n"
+                "def first_caller():\n"
+                "    from first import run as task\n"
+                "    task()\n"
+                "def second_caller():\n"
+                "    from second import run as task\n"
+                "    task()\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                app_id = store.file_by_path("app.py")["id"]
+                calls = store.conn.execute(
+                    "SELECT caller_name, callee_id FROM calls "
+                    "WHERE file_id = ? ORDER BY line",
+                    (app_id,),
+                ).fetchall()
+                targets = {
+                    call["caller_name"]:
+                    store.symbol_by_id(call["callee_id"])["qualname"]
+                    for call in calls
+                }
+                self.assertEqual(
+                    targets,
+                    {
+                        "": "module_target.run",
+                        "app.first_caller": "first.run",
+                        "app.second_caller": "second.run",
+                    },
+                )
+            finally:
+                store.close()
+
     def test_python_imported_symbol_alias_resolves_with_duplicate_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
