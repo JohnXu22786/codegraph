@@ -241,10 +241,20 @@ class _Walker:
 
     def _arrow_function_name(self, node):
         parent = node.parent
-        if parent is None or parent.type != "variable_declarator":
+        if parent is None:
             return ""
-        name = parent.child_by_field_name("name")
-        if name is None or name.type != "identifier":
+        if parent.type == "variable_declarator":
+            name = parent.child_by_field_name("name")
+            if name is None or name.type != "identifier":
+                return ""
+        elif parent.type in ("field_definition", "public_field_definition"):
+            field = "property" if parent.type == "field_definition" else "name"
+            name = parent.child_by_field_name(field)
+            if name is None or name.type not in (
+                "identifier", "property_identifier", "private_property_identifier"
+            ):
+                return ""
+        else:
             return ""
         return _node_text(name, self.source).strip()
 
