@@ -221,7 +221,11 @@ def _build_index_locked(cfg: ProjectConfig, force: bool = False,
     if not discovery_complete:
         # An incomplete walk may omit an existing Rust source; retain its
         # ancestor manifests until the next complete discovery.
-        rust_source_paths.extend(path for path in known if path.endswith(".rs"))
+        rust_source_paths.extend(
+            row["path"] for row in store.conn.execute(
+                "SELECT path FROM files WHERE lang = ?", ("rust",)
+            )
+        )
     cargo_manifest_paths = _cargo_manifest_paths(root, rust_source_paths)
     scan_config = _scan_config(
         cfg, include_cargo=has_indexed_rust or has_discovered_rust,
