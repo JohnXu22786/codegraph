@@ -3,6 +3,7 @@
 import json
 import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -764,6 +765,159 @@ class BuilderTest(unittest.TestCase):
             try:
                 self.assertIsNotNone(store.symbol_by_qualname("module.replacement"))
                 self.assertIsNone(store.symbol_by_qualname("module.original"))
+            finally:
+                store.close()
+
+    def test_force_rebuild_waits_for_inflight_incremental_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "module.py"
+            source.write_text("def original():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+
+            source.write_text(
+                "def force_snapshot():\n    return 2\n", encoding="utf-8")
+            force_scan_started = threading.Event()
+            release_force_scan = threading.Event()
+            incremental_call_started = threading.Event()
+            incremental_scan_started = threading.Event()
+            errors = []
+            from codegraph.scanner import scan_text as real_scan_text
+
+            def controlled_scan(text, lang, rel_path, engine):
+                if "force_snapshot" in text:
+                    force_scan_started.set()
+                    if not release_force_scan.wait(5):
+                        raise TimeoutError("force scan was not released")
+                elif "newer_incremental" in text:
+                    incremental_scan_started.set()
+                return real_scan_text(text, lang, rel_path, engine)
+
+            def run_build(force=False, call_started=None):
+                if call_started is not None:
+                    call_started.set()
+                try:
+                    build_index(cfg, force=force, quiet=True)
+                except Exception as exc:
+                    errors.append(exc)
+
+            with patch("codegraph.builder.scan_text", side_effect=controlled_scan):
+                force_thread = threading.Thread(
+                    target=run_build, kwargs={"force": True},
+                    name="force-build",
+                )
+                incremental_thread = None
+                force_thread.start()
+                try:
+                    self.assertTrue(force_scan_started.wait(5))
+                    source.write_text(
+                        "def newer_incremental():\n    return 3\n",
+                        encoding="utf-8",
+                    )
+                    incremental_thread = threading.Thread(
+                        target=run_build,
+                        kwargs={"call_started": incremental_call_started},
+                        name="incremental-build",
+                    )
+                    incremental_thread.start()
+                    self.assertTrue(incremental_call_started.wait(5))
+                    self.assertFalse(incremental_scan_started.wait(0.2))
+                finally:
+                    release_force_scan.set()
+                    force_thread.join(5)
+                    if incremental_thread is not None:
+                        incremental_thread.join(5)
+
+            self.assertFalse(force_thread.is_alive())
+            self.assertIsNotNone(incremental_thread)
+            self.assertFalse(incremental_thread.is_alive())
+            self.assertEqual(errors, [])
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(
+                    store.symbol_by_qualname("module.newer_incremental")
+                )
+                self.assertIsNone(
+                    store.symbol_by_qualname("module.force_snapshot")
+                )
+            finally:
+                store.close()
+
+    def test_incremental_builds_commit_in_source_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "module.py"
+            source.write_text("def original():\n    return 1\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+
+            source.write_text(
+                "def first_snapshot():\n    return 2\n", encoding="utf-8")
+            first_scan_started = threading.Event()
+            release_first_scan = threading.Event()
+            second_call_started = threading.Event()
+            second_scan_started = threading.Event()
+            errors = []
+            from codegraph.scanner import scan_text as real_scan_text
+
+            def controlled_scan(text, lang, rel_path, engine):
+                if "first_snapshot" in text:
+                    first_scan_started.set()
+                    if not release_first_scan.wait(5):
+                        raise TimeoutError("first scan was not released")
+                elif "second_snapshot" in text:
+                    second_scan_started.set()
+                return real_scan_text(text, lang, rel_path, engine)
+
+            def run_build(call_started=None):
+                if call_started is not None:
+                    call_started.set()
+                try:
+                    build_index(cfg, quiet=True)
+                except Exception as exc:
+                    errors.append(exc)
+
+            with patch("codegraph.builder.scan_text", side_effect=controlled_scan):
+                first_thread = threading.Thread(
+                    target=run_build, name="first-incremental-build",
+                )
+                second_thread = None
+                first_thread.start()
+                try:
+                    self.assertTrue(first_scan_started.wait(5))
+                    source.write_text(
+                        "def second_snapshot():\n    return 3\n",
+                        encoding="utf-8",
+                    )
+                    second_thread = threading.Thread(
+                        target=run_build,
+                        kwargs={"call_started": second_call_started},
+                        name="second-incremental-build",
+                    )
+                    second_thread.start()
+                    self.assertTrue(second_call_started.wait(5))
+                    self.assertFalse(second_scan_started.wait(0.2))
+                finally:
+                    release_first_scan.set()
+                    first_thread.join(5)
+                    if second_thread is not None:
+                        second_thread.join(5)
+
+            self.assertFalse(first_thread.is_alive())
+            self.assertIsNotNone(second_thread)
+            self.assertFalse(second_thread.is_alive())
+            self.assertEqual(errors, [])
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertIsNotNone(
+                    store.symbol_by_qualname("module.second_snapshot")
+                )
+                self.assertIsNone(
+                    store.symbol_by_qualname("module.first_snapshot")
+                )
             finally:
                 store.close()
 

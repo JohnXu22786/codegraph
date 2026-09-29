@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,18 @@ from .store import IndexStore
 
 _RESOLVER_VERSION = 18
 _SCANNER_VERSION = 20
+_build_locks = {}
+_build_locks_guard = threading.Lock()
+
+
+def _build_lock_for(db_path: Path):
+    resolved_db = db_path.resolve()
+    with _build_locks_guard:
+        lock = _build_locks.get(resolved_db)
+        if lock is None:
+            lock = threading.Lock()
+            _build_locks[resolved_db] = lock
+        return lock
 
 
 @dataclass
@@ -149,6 +162,12 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     atomically, files that disappeared are dropped. ``force=True`` rebuilds
     every file.
     """
+    with _build_lock_for(Path(cfg.db_path)):
+        return _build_index_locked(cfg, force=force, quiet=quiet, log=log)
+
+
+def _build_index_locked(cfg: ProjectConfig, force: bool = False,
+                        quiet: bool = False, log=None) -> IndexReport:
     started = time.monotonic()
     report = IndexReport()
     emit = (lambda msg: None) if quiet else (log or print)
