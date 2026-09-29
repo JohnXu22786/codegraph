@@ -1159,6 +1159,56 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_go_import_fallback_excludes_test_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "go.mod").write_text(
+                "module example.com/acme\n\ngo 1.22\n", encoding="utf-8")
+            package_dir = root / "helper"
+            package_dir.mkdir()
+            (package_dir / "a_test.go").write_text(
+                "package helper_test\nfunc Fetch() {}\n", encoding="utf-8")
+            (package_dir / "z.go").write_text(
+                "package helper\nfunc Fetch() {}\n", encoding="utf-8")
+            (root / "main.go").write_text(
+                "package main\n"
+                'import h "example.com/acme/helper"\n'
+                "func caller() { h.Fetch() }\n",
+                encoding="utf-8",
+            )
+
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                main_id = store.file_by_path("main.go")["id"]
+                test_file = store.file_by_path("helper/a_test.go")
+                self.assertIsNotNone(test_file)
+                self.assertTrue(store.conn.execute(
+                    "SELECT 1 FROM symbols WHERE file_id = ? AND name = ?",
+                    (test_file["id"], "Fetch"),
+                ).fetchone())
+
+                imp = store.imports_for_file(main_id)[0]
+                self.assertEqual(
+                    store.file_by_id(imp["target_id"])["path"],
+                    "helper/z.go",
+                )
+                target_id = resolve_callee(store, main_id, "h.Fetch")
+                self.assertIsNotNone(target_id)
+                self.assertEqual(
+                    store.file_by_id(store.symbol_by_id(target_id).file_id)["path"],
+                    "helper/z.go",
+                )
+                edge = store.conn.execute(
+                    "SELECT callee_id FROM calls WHERE file_id = ? AND callee = ?",
+                    (main_id, "h.Fetch"),
+                ).fetchone()
+                self.assertEqual(edge["callee_id"], target_id)
+            finally:
+                store.close()
+
     def test_go_raw_string_alias_resolves_imported_call(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
