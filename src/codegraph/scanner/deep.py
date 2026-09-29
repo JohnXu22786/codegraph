@@ -225,7 +225,7 @@ class _Walker:
         self.stack = []  # (kind, qualname) of open containers
         self.call_stack = []  # qualified names of active callable declarations
         self.items = []  # (start, depth, SymbolRec)
-        self.raw_calls = []  # (callee, line, caller)
+        self.raw_calls = []  # (callee, line, caller, python_header_call)
         self.imports = []
 
     # -- helpers -----------------------------------------------------------
@@ -473,6 +473,17 @@ class _Walker:
                 imp.names = matches[-1].names
         return imports
 
+    def _python_header_call(self, node):
+        child = node
+        parent = node.parent
+        while parent is not None:
+            if parent.type in ("function_definition", "class_definition"):
+                body = parent.child_by_field_name("body")
+                if body is None or child != body:
+                    return True
+            child, parent = parent, parent.parent
+        return False
+
     def _record_call(self, node):
         text = _node_text(node, self.source)
         cut = text.split("(", 1)[0]
@@ -523,7 +534,10 @@ class _Walker:
         if head in _EXCLUDE[self.lang]:
             return
         caller = self.call_stack[-1] if self.call_stack else ""
-        self.raw_calls.append((callee, node.start_point[0] + 1, caller))
+        header_call = (
+            self.lang == "python" and self._python_header_call(node)
+        )
+        self.raw_calls.append((callee, node.start_point[0] + 1, caller, header_call))
 
 
 def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
@@ -565,9 +579,12 @@ def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
 
         for r in recs:
             r.end = _python_body_end(lines, r.start, _indent(lines[r.start - 1]))
-    calls = [
-        CallRec(caller, callee, line)
-        for callee, line, caller in walker.raw_calls
-    ]
-    _assign_callers([call for call in calls if not call.caller], recs)
+    calls = []
+    attributable_calls = []
+    for callee, line, caller, header_call in walker.raw_calls:
+        call = CallRec(caller, callee, line)
+        calls.append(call)
+        if not caller and not header_call:
+            attributable_calls.append(call)
+    _assign_callers(attributable_calls, recs)
     return FileScan(lang, module, recs, calls, walker.imports)
