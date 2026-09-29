@@ -53,9 +53,14 @@ def _cmd_index(args, cfg):
     from .builder import build_index
 
     report = build_index(cfg, force=args.force, quiet=args.quiet or args.json)
-    if args.force and not report.complete:
+    if not report.complete:
+        if args.force:
+            raise RuntimeError(
+                "forced index rebuild incomplete; previous index was preserved"
+            )
         raise RuntimeError(
-            "forced index rebuild incomplete; previous index was preserved"
+            "incremental reindex incomplete; partial changes "
+            "may have been committed"
         )
     if args.json:
         print(json.dumps(report.__dict__, ensure_ascii=False, indent=2))
