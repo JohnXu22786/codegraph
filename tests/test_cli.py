@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -172,6 +173,48 @@ class CliSmokeTest(unittest.TestCase):
         dot = Path(self.tmp.name, "g.dot").read_text(encoding="utf-8")
         self.assertIn("digraph", dot)
         self.assertIn("->", dot)
+
+    def test_query_commands_do_not_migrate_legacy_index(self):
+        proc = _run(["index", "--root", str(self.root)], cwd=self.tmp.name)
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode("utf-8", "replace"))
+
+        indexed_db = self.root / ".cg" / "cg.sqlite"
+        cases = (
+            ("status", ["status"], "files"),
+            ("query", ["callers", "pkg.pricing.price"], "pkg.pricing.discount"),
+            ("export-dot", ["export", "dot"], "digraph codegraph"),
+            ("export-json", ["export", "json"], '"files"'),
+        )
+        for name, command, expected in cases:
+            with self.subTest(command=name):
+                legacy_db = Path(self.tmp.name) / f"{name}.sqlite"
+                shutil.copy2(indexed_db, legacy_db)
+                legacy = sqlite3.connect(str(legacy_db))
+                try:
+                    legacy.execute(
+                        "ALTER TABLE symbols DROP COLUMN default_export"
+                    )
+                    legacy.commit()
+                finally:
+                    legacy.close()
+
+                proc = _run([
+                    *command, "--root", str(self.root), "--db", str(legacy_db)
+                ])
+                self.assertEqual(
+                    proc.returncode, 0, proc.stderr.decode("utf-8", "replace")
+                )
+                self.assertIn(expected, proc.stdout.decode("utf-8", "replace"))
+
+                legacy = sqlite3.connect(str(legacy_db))
+                try:
+                    columns = {
+                        row[1]
+                        for row in legacy.execute("PRAGMA table_info(symbols)")
+                    }
+                finally:
+                    legacy.close()
+                self.assertNotIn("default_export", columns)
 
     def test_serve_stdio_subprocess(self):
         _run(["index", "--root", str(self.root)], cwd=self.tmp.name)

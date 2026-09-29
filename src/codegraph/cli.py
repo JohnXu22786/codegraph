@@ -28,7 +28,7 @@ def _open_store(cfg, require_indexed=True):
         raise SystemExit(
             f"error: no index at {cfg.db_path}; run 'codegraph index' first"
         )
-    store = IndexStore(str(db))
+    store = IndexStore(str(db), read_only=True)
     if require_indexed and not store.get_meta("last_indexed"):
         store.close()
         raise SystemExit(
