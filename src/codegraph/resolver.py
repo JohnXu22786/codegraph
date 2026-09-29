@@ -136,7 +136,9 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
     )
     if alias_target is not None:
         return alias_target
-    alias_target = _python_alias_symbol(store, file_id, callee_text)
+    alias_target = _python_alias_symbol(
+        store, file_id, callee_text, caller_name=caller_name
+    )
     if alias_target is not None:
         return alias_target
 
@@ -585,12 +587,60 @@ def _rust_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
     return None
 
 
-def _python_alias_symbol(store: IndexStore, file_id: int, callee_text: str):
+def _python_alias_symbol(store: IndexStore, file_id: int, callee_text: str,
+                         caller_name=None):
     """Resolve calls through aliased Python module and member imports."""
     file = store.file_by_id(file_id)
     if file is None or file["lang"] != "python":
         return None
+
+    caller_scope_order = None
+    if caller_name is not None:
+        caller_scope_order = []
+        if caller_name:
+            caller = store.conn.execute(
+                "SELECT qualname, parent FROM symbols WHERE file_id = ? "
+                "AND qualname = ? ORDER BY id LIMIT 1",
+                (file_id, caller_name),
+            ).fetchone()
+            if caller is None:
+                caller_scope_order = None
+            else:
+                caller_scope_order.append(caller["qualname"])
+                parent = caller["parent"]
+                while parent:
+                    scope = store.conn.execute(
+                        "SELECT qualname, parent, kind FROM symbols "
+                        "WHERE file_id = ? AND qualname = ? ORDER BY id LIMIT 1",
+                        (file_id, parent),
+                    ).fetchone()
+                    if scope is None:
+                        break
+                    if scope["kind"] in ("function", "method"):
+                        caller_scope_order.append(scope["qualname"])
+                    parent = scope["parent"]
+
+    imports = []
     for imp in store.imports_for_file(file_id):
+        if caller_scope_order is None:
+            imports.append((0, imp["line"], imp))
+            continue
+        import_scope = store.conn.execute(
+            "SELECT qualname FROM symbols WHERE file_id = ? "
+            "AND start_line <= ? AND end_line >= ? "
+            "ORDER BY (end_line - start_line), start_line DESC, id LIMIT 1",
+            (file_id, imp["line"], imp["line"]),
+        ).fetchone()
+        if import_scope is None:
+            scope_rank = len(caller_scope_order)
+        else:
+            try:
+                scope_rank = caller_scope_order.index(import_scope["qualname"])
+            except ValueError:
+                continue
+        imports.append((scope_rank, imp["line"], imp))
+
+    for _, _, imp in sorted(imports, key=lambda item: item[:2]):
         if not imp["target_id"]:
             continue
         if imp["kind"] == "module":
