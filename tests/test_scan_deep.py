@@ -121,6 +121,20 @@ class DeepPythonTest(unittest.TestCase):
 
 @unittest.skipUnless(deep.supports("javascript"), "tree-sitter JavaScript grammar not installed")
 class DeepJavascriptTest(unittest.TestCase):
+    def test_empty_class_does_not_claim_following_module_call(self):
+        scan = deep.deep_scan(
+            "class C {}\noutside();\n", "javascript", "app.js"
+        )
+
+        class_symbol = next(
+            symbol for symbol in scan.symbols if symbol.qualname == "app.C"
+        )
+        self.assertEqual(class_symbol.end, 1)
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("", "outside")],
+        )
+
     def test_optional_chain_calls_keep_full_callee(self):
         src = (
             "function caller(client) {\n"
@@ -265,6 +279,18 @@ class DeepJavascriptTest(unittest.TestCase):
     deep.supports("typescript"), "tree-sitter TypeScript grammar not installed"
 )
 class DeepTypescriptTest(unittest.TestCase):
+    def test_empty_class_does_not_claim_following_module_call(self):
+        scan = deep.deep_scan("class C {}\noutside();\n", "typescript", "app.ts")
+
+        class_symbol = next(
+            symbol for symbol in scan.symbols if symbol.qualname == "app.C"
+        )
+        self.assertEqual(class_symbol.end, 1)
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("", "outside")],
+        )
+
     def test_optional_chain_calls_keep_full_callee(self):
         src = (
             "function caller(client: Client) {\n"
