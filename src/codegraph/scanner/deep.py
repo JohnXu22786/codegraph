@@ -579,7 +579,7 @@ def deep_scan(text: str, lang: str, rel_path=None) -> FileScan:
         walker.walk(child)
 
     recs = _finalize(walker.items, len(lines))
-    if lang in ("rust", "javascript", "typescript", "java"):
+    if lang in ("rust", "javascript", "typescript", "java", "go"):
         for rec in recs:
             rec.end = max(rec.start, rec.end)
     if lang == "python":
