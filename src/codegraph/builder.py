@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 from .config import ProjectConfig
 from .resolver import resolve_all
@@ -31,6 +38,39 @@ def _build_lock_for(db_path: Path):
             lock = threading.Lock()
             _build_locks[resolved_db] = lock
         return lock
+
+
+@contextmanager
+def _build_process_lock(db_path: Path):
+    # Keep this sidecar stable; unlinking it could split concurrent lockers.
+    lock_path = db_path.parent.resolve() / f"{db_path.name}.lock"
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            lock_file.seek(0, os.SEEK_END)
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(
+                        lock_file.fileno(), msvcrt.LK_NBLCK, 1
+                    )
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EDEADLK):
+                        raise
+                    time.sleep(0.05)
+        else:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass
@@ -168,14 +208,25 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
 
 def _build_index_locked(cfg: ProjectConfig, force: bool = False,
                         quiet: bool = False, log=None) -> IndexReport:
-    started = time.monotonic()
-    report = IndexReport()
-    emit = (lambda msg: None) if quiet else (log or print)
     root = Path(cfg.root)
     if not root.exists():
         raise FileNotFoundError(f"index root does not exist: {root}")
     if not root.is_dir():
         raise NotADirectoryError(f"index root is not a directory: {root}")
+    db = Path(cfg.db_path)
+    db.parent.mkdir(parents=True, exist_ok=True)
+    with _build_process_lock(db):
+        return _build_index_with_process_lock(
+            cfg, force=force, quiet=quiet, log=log
+        )
+
+
+def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
+                                   quiet: bool = False, log=None) -> IndexReport:
+    started = time.monotonic()
+    report = IndexReport()
+    emit = (lambda msg: None) if quiet else (log or print)
+    root = Path(cfg.root)
     discovery_complete = True
 
     def on_discovery_error(exc):
@@ -195,7 +246,6 @@ def _build_index_locked(cfg: ProjectConfig, force: bool = False,
     )
 
     db = Path(cfg.db_path)
-    db.parent.mkdir(parents=True, exist_ok=True)
 
     # Build forced indexes off to the side so a failed rebuild cannot destroy
     # the last published index.
