@@ -567,12 +567,12 @@ class BuilderTest(unittest.TestCase):
 
     def test_deleted_file_removed(self):
         build_index(self._cfg())
-        (self.root / "helper.go").unlink()
+        (self.root / "helper" / "helper.go").unlink()
         report = build_index(self._cfg())
         self.assertEqual(report.files_removed, 1)
         self.assertEqual(report.files_changed, 0)
         store = IndexStore(str(self._cfg().db_path))
-        self.assertIsNone(store.file_by_path("helper.go"))
+        self.assertIsNone(store.file_by_path("helper/helper.go"))
         store.close()
 
     def test_inaccessible_directory_preserves_indexed_files(self):
