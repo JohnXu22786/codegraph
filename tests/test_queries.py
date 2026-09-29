@@ -613,6 +613,24 @@ class QueryTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_dependents_via_top_level_relative_import(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "__init__.py").write_text(
+                "from . import sibling\n", encoding="utf-8")
+            (root / "sibling.py").write_text(
+                "def deliver(item):\n    return item\n", encoding="utf-8")
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                rows = query_dependents(store, "sibling")
+                self.assertEqual(
+                    [row["path"] for row in rows], ["__init__.py"])
+            finally:
+                store.close()
+
     def test_relative_import_does_not_match_package_prefix(self):
         """A sibling package with a shared prefix is not a dependent."""
         with tempfile.TemporaryDirectory() as tmp:

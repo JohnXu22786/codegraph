@@ -173,8 +173,8 @@ def query_dependents(store: IndexStore, module: str, limit: int = 200):
                for r in rows]
     seen = {r["path"] for r in results}
     mod = file["module"] or ""
-    if "." in mod:
-        base, name = mod.rsplit(".", 1)
+    if mod:
+        base, _, name = mod.rpartition(".")
         # Match plain JSON tokens with instr(); for aliases, normalize JSON's
         # escaped tabs and use GLOB so arbitrary spaces/tabs around ``as``
         # work. Relative imports (module ".") count too when the importing
