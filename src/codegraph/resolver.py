@@ -202,6 +202,7 @@ def _go_package_files(store: IndexStore, package_dir: Path, package_module=None)
     return [
         (row["id"], Path(row["path"])) for row in rows
         if Path(row["path"]).parent == package_dir
+        and not Path(row["path"]).name.endswith("_test.go")
         and (package_module is None or row["module"] == package_module)
     ]
 
