@@ -221,6 +221,18 @@ class DeepJavascriptTest(unittest.TestCase):
             [(imp.module, imp.kind, imp.line) for imp in scan.imports],
             [("./lazy.js", "require", 1)],
         )
+        self.assertEqual(scan.calls, [])
+
+    def test_shadowed_require_parameter_is_recorded_as_call(self):
+        src = 'function f(require) { require("./not-a-module"); }'
+
+        scan = deep.deep_scan(src, "javascript", "app.js")
+
+        self.assertEqual(scan.imports, [])
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("app.f", "require")],
+        )
 
     def test_commonjs_alias_binding_is_preserved(self):
         src = (
@@ -334,6 +346,17 @@ class DeepTypescriptTest(unittest.TestCase):
         self.assertEqual(
             [(imp.module, imp.kind, imp.line) for imp in scan.imports],
             [("./lazy.js", "import", 1)],
+        )
+
+    def test_shadowed_require_parameter_is_recorded_as_call(self):
+        src = 'function f(require: Loader) { require("./not-a-module"); }'
+
+        scan = deep.deep_scan(src, "typescript", "app.ts")
+
+        self.assertEqual(scan.imports, [])
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("app.f", "require")],
         )
 
     def test_declaration_function_is_indexed(self):
