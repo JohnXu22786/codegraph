@@ -417,6 +417,77 @@ class BuilderTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_incomplete_discovery_retains_cargo_context_for_custom_rust_extension(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            member = workspace / "member"
+            src = member / "src"
+            src.mkdir(parents=True)
+            (workspace / "Cargo.toml").write_text(
+                '[workspace]\nmembers = ["member"]\n\n'
+                '[workspace.package]\nedition = "2021"\n',
+                encoding="utf-8",
+            )
+            (member / "Cargo.toml").write_text(
+                '[package]\nname = "member"\nversion = "0.1.0"\n'
+                'edition.workspace = true\n\n'
+                '[lib]\npath = "src/lib.rsx"\n',
+                encoding="utf-8",
+            )
+            (src / "lib.rsx").write_text(
+                '#[path = "child.rsx"] mod child;\n'
+                "use crate::child::Thing;\n",
+                encoding="utf-8",
+            )
+            (src / "child.rsx").write_text(
+                "pub struct Thing;\n", encoding="utf-8")
+
+            cfg = load_config(root=str(workspace))
+            cfg.engine = "quick"
+            cfg.language_map = {".rsx": "rust"}
+            build_index(cfg, quiet=True)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                import_row = store.find_import(module="crate::child::Thing")
+                self.assertEqual(
+                    store.file_by_id(import_row["target_id"])["path"],
+                    "member/src/child.rsx",
+                )
+                expected_manifests = {
+                    "Cargo.toml", "member/Cargo.toml",
+                }
+                self.assertEqual(
+                    set(json.loads(store.get_meta("cargo_manifest_paths"))),
+                    expected_manifests,
+                )
+            finally:
+                store.close()
+
+            def incomplete_walk(path, followlinks=False, onerror=None):
+                if onerror is not None:
+                    onerror(PermissionError(
+                        13, "Permission denied", str(member)))
+                yield str(workspace), [], []
+
+            with patch("codegraph.scanner.walk.os.walk", incomplete_walk):
+                report = build_index(cfg, quiet=True)
+
+            self.assertFalse(report.complete)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                self.assertEqual(
+                    set(json.loads(store.get_meta("cargo_manifest_paths"))),
+                    expected_manifests,
+                )
+                import_row = store.find_import(module="crate::child::Thing")
+                self.assertEqual(
+                    store.file_by_id(import_row["target_id"])["path"],
+                    "member/src/child.rsx",
+                )
+            finally:
+                store.close()
+
     def test_resolver_version_change_re_resolves_go_dotted_import(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
