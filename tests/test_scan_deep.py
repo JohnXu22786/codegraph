@@ -57,6 +57,27 @@ class DeepPythonTest(unittest.TestCase):
         quick_sig = {(c.caller, c.callee) for c in quick_scan.calls}
         self.assertEqual(deep_sig, quick_sig)
 
+    def test_python_header_calls_are_not_owned_by_declarations(self):
+        src = (
+            "def run(value=make_default()): function_body()\n"
+            "\n"
+            "class Child(make_base()):\n"
+            "    def method(self, value=make_method_default()): method_body()\n"
+        )
+
+        scan = deep.deep_scan(src, "python")
+
+        self.assertEqual(
+            {call.callee: call.caller for call in scan.calls},
+            {
+                "make_default": "",
+                "function_body": "run",
+                "make_base": "",
+                "make_method_default": "",
+                "method_body": "Child.method",
+            },
+        )
+
     def test_require_becomes_import_in_deep(self):
         """Regression: the require->import conversion was dead code, so the
         default (deep) engine lost CommonJS dependency edges."""
