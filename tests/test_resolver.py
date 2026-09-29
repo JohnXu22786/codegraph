@@ -1025,9 +1025,26 @@ class ResolverTest(unittest.TestCase):
                 store.close()
 
     def test_go_imported_function(self):
-        gid = self._callee("main.go", "helper.Greet")
+        main_id = self._file_id("main.go")
+        imports = {
+            imp["module"]: imp for imp in self.store.imports_for_file(main_id)
+        }
+        self.assertIn("proj/helper", imports)
+        import_target_id = imports["proj/helper"]["target_id"]
+        self.assertIsNotNone(import_target_id)
+        self.assertEqual(
+            self.store.file_by_id(import_target_id)["path"],
+            "helper/helper.go",
+        )
+
+        gid = resolve_callee(self.store, main_id, "helper.Greet")
         self.assertIsNotNone(gid)
-        self.assertEqual(self.store.symbol_by_id(gid).qualname, "helper.Greet")
+        target = self.store.symbol_by_id(gid)
+        self.assertEqual(target.qualname, "helper.Greet")
+        self.assertEqual(
+            self.store.file_by_id(target.file_id)["path"],
+            "helper/helper.go",
+        )
 
     def test_go_same_package_resolution_is_directory_scoped(self):
         with tempfile.TemporaryDirectory() as tmp:

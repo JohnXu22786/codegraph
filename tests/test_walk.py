@@ -122,7 +122,7 @@ class WalkTest(unittest.TestCase):
             "web/index.ts",
             "web/app.js",
             "main.go",
-            "helper.go",
+            "helper/helper.go",
             "Calc.java",
             "Runner.java",
             "rustx/lib.rs",
