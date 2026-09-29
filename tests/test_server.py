@@ -313,6 +313,31 @@ class McpServerTest(unittest.TestCase):
         replies = self._run([self._msg(1, "mystery/method")])
         self.assertEqual(replies[0]["error"]["code"], -32601)
 
+    def test_lone_surrogate_in_method_returns_serializable_protocol_error(self):
+        payload = (
+            b'{"jsonrpc":"2.0","id":1,"method":"\\ud800"}\n'
+            b'{"jsonrpc":"2.0","id":2,"method":"unknown/caf\xc3\xa9"}\n'
+        )
+        out = io.BytesIO()
+        log = io.BytesIO()
+
+        run_stdio(io.BytesIO(payload), out, log, self.cfg)
+
+        output = out.getvalue()
+        self.assertIn(b'"message":"Method not found: \\ud800"', output)
+        self.assertIn(b'unknown/caf\xc3\xa9', output)
+        replies = [json.loads(line) for line in output.decode("utf-8").splitlines()]
+        self.assertEqual(replies[0]["id"], 1)
+        self.assertEqual(replies[0]["error"]["code"], -32601)
+        self.assertEqual(
+            replies[0]["error"]["message"], "Method not found: \ud800"
+        )
+        self.assertEqual(replies[1]["id"], 2)
+        self.assertEqual(
+            replies[1]["error"]["message"],
+            "Method not found: unknown/café",
+        )
+
     def test_malformed_json_returns_parse_error_and_does_not_kill_server(self):
         payload = b'not-json\n{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n'
         out = io.BytesIO()
