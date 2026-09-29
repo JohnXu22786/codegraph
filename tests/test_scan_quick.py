@@ -494,6 +494,43 @@ class QuickGoJavaRustTest(unittest.TestCase):
         self.assertIn("fmt.Println", calls)
         self.assertIn("helper.Greet", calls)
 
+    def test_go_local_type_does_not_split_function_scope(self):
+        src = (
+            "package p\n"
+            "func f() {\n"
+            "    before()\n"
+            "    type Local struct{}\n"
+            "    after()\n"
+            "}\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual([symbol.qualname for symbol in scan.symbols], ["p.f"])
+        function = scan.symbols[0]
+        self.assertEqual((function.start, function.end), (2, 6))
+        self.assertEqual(
+            [(call.caller, call.callee) for call in scan.calls],
+            [("p.f", "before"), ("p.f", "after")],
+        )
+
+    def test_go_scope_tracking_ignores_braces_in_comments_and_strings(self):
+        src = (
+            "package p\n"
+            "func f() {\n"
+            "    // } does not close the function\n"
+            '    quoted := "}"\n'
+            "    raw := `}`\n"
+            "    type Local struct{}\n"
+            "    after()\n"
+            "}\n"
+        )
+
+        scan = quick.quick_scan(src, "go", "main.go")
+
+        self.assertEqual([symbol.qualname for symbol in scan.symbols], ["p.f"])
+        self.assertEqual(scan.calls[0].caller, "p.f")
+
     def test_go_aliased_single_import(self):
         src = (
             'package main\nimport h "example.com/acme/helper"\n'

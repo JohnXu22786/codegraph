@@ -987,11 +987,60 @@ def _imports_go(text):
     return imports
 
 
+def _go_brace_delta(line, state=None):
+    """Count Go scope braces on one line, ignoring comments and strings."""
+    delta = 0
+    i = 0
+    while i < len(line):
+        if state == "comment":
+            end = line.find("*/", i)
+            if end < 0:
+                break
+            i = end + 2
+            state = None
+        elif state == "raw_string":
+            end = line.find("`", i)
+            if end < 0:
+                break
+            i = end + 1
+            state = None
+        elif line.startswith("//", i):
+            break
+        elif line.startswith("/*", i):
+            i += 2
+            state = "comment"
+        elif line[i] == "`":
+            i += 1
+            state = "raw_string"
+        elif line[i] in ('"', "'"):
+            quote = line[i]
+            i += 1
+            while i < len(line):
+                if line[i] == "\\":
+                    i += 2
+                elif line[i] == quote:
+                    i += 1
+                    break
+                else:
+                    i += 1
+        elif line[i] == "{":
+            delta += 1
+            i += 1
+        elif line[i] == "}":
+            delta -= 1
+            i += 1
+        else:
+            i += 1
+    return delta, state
+
+
 def _scan_go(text, lang, rel_path=None):
     module = languages.module_of(rel_path, lang, text)
     lines = text.splitlines()
     n = len(lines)
     items = []
+    depth = 0
+    scope_state = None
     for idx, line in enumerate(lines, start=1):
         m = RE_GO_METHOD.match(line)
         if m:
@@ -999,19 +1048,20 @@ def _scan_go(text, lang, rel_path=None):
             qual = f"{parent}.{m.group(3)}"
             items.append((idx, 0, SymbolRec("method", m.group(3), qual, parent, idx, 0,
                                             m.group(4).strip())))
-            continue
-        m = RE_GO_FUNC.match(line)
-        if m:
-            qual = f"{module}.{m.group(1)}" if module else m.group(1)
-            items.append((idx, 0, SymbolRec("function", m.group(1), qual, "", idx, 0,
-                                            m.group(2).strip())))
-            continue
-        m = RE_GO_TYPE.match(line)
-        if m:
-            qual = f"{module}.{m.group(1)}" if module else m.group(1)
-            kind = "interface" if m.group(2) == "interface" else "type"
-            items.append((idx, 0, SymbolRec(kind, m.group(1), qual, "", idx, 0, "")))
-            continue
+        else:
+            m = RE_GO_FUNC.match(line)
+            if m:
+                qual = f"{module}.{m.group(1)}" if module else m.group(1)
+                items.append((idx, 0, SymbolRec("function", m.group(1), qual, "", idx, 0,
+                                                m.group(2).strip())))
+            else:
+                m = RE_GO_TYPE.match(line)
+                if m and depth == 0:
+                    qual = f"{module}.{m.group(1)}" if module else m.group(1)
+                    kind = "interface" if m.group(2) == "interface" else "type"
+                    items.append((idx, 0, SymbolRec(kind, m.group(1), qual, "", idx, 0, "")))
+        delta, scope_state = _go_brace_delta(line, scope_state)
+        depth = max(0, depth + delta)
     recs = _finalize(items, n)
     calls = []
     for idx, line in enumerate(lines, start=1):
