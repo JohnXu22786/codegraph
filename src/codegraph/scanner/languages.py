@@ -52,7 +52,7 @@ def _mask_non_code(text):
     while index < length:
         if text.startswith("//", index):
             end = index + 2
-            while end < length and text[end] not in "\r\n":
+            while end < length and text[end] != "\n":
                 end += 1
             blank(index, end)
             index = end
@@ -186,8 +186,11 @@ def _declared_package(lang, text):
         source = text[pos:]
     else:
         source = text
-    # Normalize all line endings before masking comments and literals.
-    source = source.replace("\r\n", "\n").replace("\r", "\n")
+    # Java permits CR-only files; Go line comments end only at LF.
+    if lang == "java":
+        source = source.replace("\r\n", "\n").replace("\r", "\n")
+    else:
+        source = source.replace("\r\n", "\n")
     source = _mask_non_code(source)
     # Keep leading comments/trivia supported while allowing line breaks and
     # comments between package-name components.
