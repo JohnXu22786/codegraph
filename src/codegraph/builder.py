@@ -6,6 +6,7 @@ import errno
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import time
@@ -28,6 +29,8 @@ _RESOLVER_VERSION = 18
 _SCANNER_VERSION = 20
 _build_locks = {}
 _build_locks_guard = threading.Lock()
+_root_build_locks = {}
+_root_build_locks_guard = threading.Lock()
 
 
 def _build_lock_for(db_path: Path):
@@ -71,6 +74,50 @@ def _build_process_lock(db_path: Path):
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _root_build_lock(root: Path, db_path: str):
+    """Serialize builds for one project across threads and processes."""
+    root = Path(root).resolve()
+    key = str(root)
+    with _root_build_locks_guard:
+        thread_lock = _root_build_locks.setdefault(key, threading.Lock())
+
+    with thread_lock:
+        lock_parent = Path(db_path).resolve().parent
+        lock_parent.mkdir(parents=True, exist_ok=True)
+        lock_name = f".codegraph-build-{_digest(key.encode())[:16]}.lock"
+        lock_path = lock_parent / lock_name
+        with lock_path.open("a+b") as lock_file:
+            if os.name == "nt":
+                lock_file.seek(0)
+                if not lock_file.read(1):
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                while True:
+                    try:
+                        msvcrt.locking(
+                            lock_file.fileno(), msvcrt.LK_NBLCK, 1
+                        )
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            else:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if os.name == "nt":
+                    lock_file.seek(0)
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+class _StaleBuildError(RuntimeError):
+    """Raised when source contents changed before a build could commit."""
 
 
 @dataclass
@@ -193,6 +240,48 @@ def _scan_config(cfg: ProjectConfig, include_cargo=True,
     )
 
 
+def _source_snapshot(root: Path, cfg: ProjectConfig, discovered=None) -> dict:
+    """Return content digests for the files visible to this build."""
+    if discovered is None:
+        discovered = discover_files(root, cfg)
+    snapshot = {}
+    for rel in discovered:
+        posix = rel.as_posix()
+        try:
+            data = (root / rel).read_bytes()
+        except OSError:
+            snapshot[posix] = None
+        else:
+            snapshot[posix] = _digest(data)
+    return snapshot
+
+
+def _assert_file_fresh(root: Path, path: str, digest: str):
+    """Reject a payload whose source changed while it was being scanned."""
+    try:
+        current = _digest((root / path).read_bytes())
+    except OSError as exc:
+        raise _StaleBuildError(
+            f"source changed during index build ({path}); retry"
+        ) from exc
+    if current != digest:
+        raise _StaleBuildError(
+            f"source changed during index build ({path}); retry"
+        )
+
+
+def _assert_project_fresh(root: Path, cfg: ProjectConfig, expected: dict,
+                          expected_paths):
+    """Reject a build whose discovered source set or contents changed."""
+    discovered = discover_files(root, cfg)
+    current_paths = {rel.as_posix() for rel in discovered}
+    if current_paths != expected_paths:
+        raise _StaleBuildError("project sources changed during index build; retry")
+    current = _source_snapshot(root, cfg, discovered)
+    if any(current.get(path) != digest for path, digest in expected.items()):
+        raise _StaleBuildError("project sources changed during index build; retry")
+
+
 def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
                 log=None) -> IndexReport:
     """Index (or refresh) the project described by ``cfg``.
@@ -202,8 +291,9 @@ def build_index(cfg: ProjectConfig, force: bool = False, quiet: bool = False,
     atomically, files that disappeared are dropped. ``force=True`` rebuilds
     every file.
     """
-    with _build_lock_for(Path(cfg.db_path)):
-        return _build_index_locked(cfg, force=force, quiet=quiet, log=log)
+    with _root_build_lock(Path(cfg.root), cfg.db_path):
+        with _build_lock_for(Path(cfg.db_path)):
+            return _build_index_locked(cfg, force=force, quiet=quiet, log=log)
 
 
 def _build_index_locked(cfg: ProjectConfig, force: bool = False,
@@ -236,6 +326,8 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
 
     discovered = discover_files(root, cfg, onerror=on_discovery_error)
     scan_config_complete = discovery_complete
+    source_snapshot = {}
+    source_paths = {rel.as_posix() for rel in discovered}
     has_discovered_rust = any(
         languages.lang_for(rel.as_posix(), cfg.language_map) == "rust"
         for rel in discovered
@@ -255,6 +347,8 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
     build_db = (Path(temporary_db.name) / db.name
                 if temporary_db is not None else db)
     store = IndexStore(str(build_db))
+    prebuild_db = sqlite3.connect(":memory:")
+    store.conn.backup(prebuild_db)
     build_succeeded = False
     store.set_meta("root", str(Path(cfg.root).resolve()))
     known = store.all_file_paths()
@@ -339,6 +433,7 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
                 emit(f"warning: skipping {posix}: {exc}")
                 continue
             digest = _digest(data)
+            source_snapshot[posix] = digest
             prev = store.file_by_path(posix)
 
             lang = languages.lang_for(posix, cfg.language_map)
@@ -371,6 +466,7 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
                 fid = store.upsert_file(posix, lang, len(data), digest,
                                         len(text.splitlines()), scan.module)
                 impact = store.replace_file_payload(fid, scan)
+                _assert_file_fresh(root, posix, digest)
             changed_file_ids.add(fid)
             if lang == "rust" and (prev is None or previous_mods or any(
                     item.kind == "mod" for item in scan.imports)):
@@ -386,6 +482,8 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
             report.calls += len(scan.calls)
             report.imports += len(scan.imports)
 
+        if discovery_complete:
+            _assert_project_fresh(root, cfg, source_snapshot, source_paths)
         removed_paths = sorted(known - seen) if discovery_complete else []
         if removed_paths:
             # Persist the retry marker before a removal transaction commits.
@@ -404,6 +502,8 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
             removed_file = True
             report.files_removed += 1
 
+        if discovery_complete:
+            _assert_project_fresh(root, cfg, source_snapshot, source_paths)
         needs_resolution = (
             changed_file_ids or recheck_call_ids or recheck_import_ids or
             changed_symbol_names or removed_file or resolution_pending or
@@ -429,13 +529,18 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
                     symbol_names=changed_symbol_names,
                     recheck_all_imports=added_file or removed_file,
                 )
-            store.set_meta("resolution_pending", "0")
-        # Keep a changed config pending when discovery or a discovered file
-        # could not complete, so the next run retries its stale payload.
-        if scan_config_complete:
-            store.set_meta("scan_config", scan_config)
-        store.set_meta("last_indexed", store.now_iso())
-        store.conn.commit()
+            # Keep the retry marker set until the final freshness check and
+            # metadata commit succeed.
+        # Keep a changed config pending when a discovered file could not be
+        # read or mapped, so the next run retries its stale payload.
+        with store.transaction():
+            if discovery_complete:
+                _assert_project_fresh(root, cfg, source_snapshot, source_paths)
+            if needs_resolution:
+                store.set_meta("resolution_pending", "0")
+            if scan_config_complete:
+                store.set_meta("scan_config", scan_config)
+            store.set_meta("last_indexed", store.now_iso())
 
         for row in store.conn.execute(
                 "SELECT lang, COUNT(*) AS n FROM files GROUP BY lang ORDER BY lang"):
@@ -443,8 +548,13 @@ def _build_index_with_process_lock(cfg: ProjectConfig, force: bool = False,
         # A force build starts with an empty temporary DB. Do not publish a
         # partial replacement when discovery or a file read was incomplete.
         build_succeeded = scan_config_complete
+    except _StaleBuildError:
+        store.conn.rollback()
+        prebuild_db.backup(store.conn)
+        raise
     finally:
         store.close()
+        prebuild_db.close()
         if temporary_db is not None:
             try:
                 if build_succeeded:
