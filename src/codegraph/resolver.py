@@ -177,6 +177,10 @@ def resolve_callee(store: IndexStore, file_id: int, callee_text: str,
             return rows[0]["id"]
 
     # 4. globally unique name (last resort heuristic)
+    if file["lang"] == "python":
+        head = callee_text.replace("::", ".").split(".", 1)[0]
+        if _has_unresolved_python_import_binding(store, file_id, head):
+            return None
     rows = store.conn.execute(
         "SELECT id, file_id FROM symbols WHERE name = ? LIMIT 2", (name,)
     ).fetchall()
@@ -351,8 +355,8 @@ def _imported_files(store: IndexStore, file_id: int):
                     base_parts = mod_parts
                 else:
                     base_parts = mod_parts[:-1]
-                package_depth = len(base_parts)
-                if root_is_package and file["path"] != "__init__.py":
+                package_depth = len(Path(file["path"]).parent.parts)
+                if root_is_package:
                     package_depth += 1
                 if level > package_depth:
                     continue
@@ -380,6 +384,20 @@ def _names_of(imp) -> list:
         return json.loads(imp["names"] or "[]")
     except (ValueError, TypeError):
         return []
+
+
+def _has_unresolved_python_import_binding(store, file_id, name: str) -> bool:
+    """Whether an unresolved ``from`` import may provide ``name``."""
+    for imp in store.imports_for_file(file_id):
+        if imp["kind"] != "from" or imp["target_id"] is not None:
+            continue
+        for imported in _names_of(imp):
+            if imported == "*":
+                return True
+            bound = re.split(r"\s+as\s+", imported, maxsplit=1)[-1].strip()
+            if bound == name:
+                return True
+    return False
 
 
 def _split_import_alias(binding: str):

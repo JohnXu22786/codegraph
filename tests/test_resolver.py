@@ -3066,20 +3066,17 @@ class ResolverTest(unittest.TestCase):
             finally:
                 store.close()
 
-    def test_python_relative_import_cannot_escape_package_depth(self):
-        """An over-deep relative import must not resolve a root-level module."""
+    def test_overdeep_relative_import_does_not_enable_global_call_fallback(self):
+        """An unresolved over-deep import must not bind y.foo to global foo."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             pkg = root / "pkg" / "sub"
             pkg.mkdir(parents=True)
-            (root / "x.py").write_text(
-                "value = 1\n", encoding="utf-8")
+            (root / "x.py").write_text("value = 1\n", encoding="utf-8")
             (root / "y.py").write_text(
                 "def foo():\n    return 1\n", encoding="utf-8")
             (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
             (pkg / "__init__.py").write_text("", encoding="utf-8")
-            (root / "pkg" / "other.py").write_text(
-                "def foo():\n    return 1\n", encoding="utf-8")
             (pkg / "module.py").write_text(
                 "from ...x import y\n\n"
                 "def call():\n    return y.foo()\n", encoding="utf-8")
@@ -3092,6 +3089,7 @@ class ResolverTest(unittest.TestCase):
                 self.assertIsNone(resolve_module(store, fid, "...x"))
                 self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
                 self.assertIsNone(resolve_callee(store, fid, "y.foo"))
+                self.assertIsNone(store.find_call(callee="y.foo")["callee_id"])
             finally:
                 store.close()
 
@@ -3112,6 +3110,64 @@ class ResolverTest(unittest.TestCase):
                 fid = store.file_by_path("pkg/module.py")["id"]
                 self.assertIsNone(resolve_module(store, fid, ".."))
                 self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+            finally:
+                store.close()
+
+    def test_overdeep_aliased_import_does_not_enable_global_call_fallback(self):
+        """An unresolved aliased import must not bind z.foo to global foo."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg" / "sub"
+            pkg.mkdir(parents=True)
+            (root / "x.py").write_text("value = 1\n", encoding="utf-8")
+            (root / "unrelated.py").write_text(
+                "def foo():\n    return 1\n", encoding="utf-8")
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "module.py").write_text(
+                "from ....x import y as z\n\n"
+                "def invoke():\n    return z.foo()\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("pkg/sub/module.py")["id"]
+                self.assertIsNone(resolve_module(store, fid, "....x"))
+                self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+                self.assertIsNone(resolve_callee(store, fid, "z.foo"))
+                self.assertIsNone(store.find_call(callee="z.foo")["callee_id"])
+            finally:
+                store.close()
+
+    def test_overdeep_star_import_does_not_enable_global_call_fallback(self):
+        """An unresolved star import must not bind foo to global foo."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pkg = root / "pkg" / "sub"
+            pkg.mkdir(parents=True)
+            (root / "x.py").write_text("value = 1\n", encoding="utf-8")
+            (root / "unrelated.py").write_text(
+                "def foo():\n    return 1\n", encoding="utf-8")
+            (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "module.py").write_text(
+                "from ....x import *\n\n"
+                "def invoke():\n    return foo()\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                fid = store.file_by_path("pkg/sub/module.py")["id"]
+                self.assertIsNone(resolve_module(store, fid, "....x"))
+                self.assertIsNone(store.imports_for_file(fid)[0]["target_id"])
+                self.assertIsNone(resolve_callee(store, fid, "foo"))
+                self.assertIsNone(store.find_call(callee="foo")["callee_id"])
             finally:
                 store.close()
 
