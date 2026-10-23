@@ -300,6 +300,8 @@ def _imported_files(store: IndexStore, file_id: int):
     for imp in store.imports_for_file(file_id):
         if file["lang"] == "go" and _go_blank_import(imp):
             continue
+        target_file = store.file_by_id(imp["target_id"]) if imp["target_id"] else None
+        target_module = target_file["module"] if target_file else None
         if imp["target_id"]:
             out.add(imp["target_id"])
             if file["lang"] == "go":
@@ -354,6 +356,8 @@ def _imported_files(store: IndexStore, file_id: int):
                 base = ".".join(base_parts)
             for suffix in (nm, nm + ".__init__"):
                 full = f"{base}.{suffix}" if base else suffix
+                if full == target_module:
+                    continue
                 row = store.conn.execute(
                     "SELECT id FROM files WHERE module = ? ORDER BY id LIMIT 1",
                     (full,),
@@ -1710,6 +1714,7 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
     the full-graph behavior for callers that explicitly request it; an
     iterable scopes work to the changed files and invalidated incoming edges.
     """
+    previous_imported_files = {}
     with store.transaction():
         if file_ids is None:
             import_rows = store.conn.execute(
@@ -1788,10 +1793,13 @@ def resolve_all(store: IndexStore, file_ids=None, call_ids=(), import_ids=(),
             else:
                 call_rows = []
 
-        previous_imported_files = {
-            file_id: _imported_files(store, file_id)
-            for file_id in {row["file_id"] for row in call_rows}
-        }
+        if file_ids is None or recheck_all_imports:
+            # A full retry or an all-import recheck can change target IDs
+            # before calls are resolved, so preserve the prior reachability.
+            previous_imported_files = {
+                file_id: _imported_files(store, file_id)
+                for file_id in {row["file_id"] for row in call_rows}
+            }
 
         for row in import_rows:
             target = resolve_module(
