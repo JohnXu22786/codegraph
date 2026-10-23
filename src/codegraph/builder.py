@@ -21,12 +21,12 @@ else:
 
 from .config import ProjectConfig
 from .resolver import resolve_all
-from .scanner import deep, languages, scan_text
+from .scanner import SCAN_VERSION, deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
 _RESOLVER_VERSION = 18
-_SCANNER_VERSION = 20
+_SCANNER_VERSION = SCAN_VERSION
 _build_locks = {}
 _build_locks_guard = threading.Lock()
 _root_build_locks = {}
@@ -234,7 +234,7 @@ def _scan_config(cfg: ProjectConfig, include_cargo=True,
              _cargo_manifest_state(
                   Path(cfg.root), cargo_manifest_paths) if include_cargo else {}
           ),
-          "go_module": _go_mod_state(Path(cfg.root), include_go)},
+         "go_module": _go_mod_state(Path(cfg.root), include_go)},
         sort_keys=True,
         separators=(",", ":"),
     )
