@@ -25,7 +25,7 @@ from .scanner import SCAN_VERSION, deep, languages, scan_text
 from .scanner.walk import discover_files
 from .store import IndexStore
 
-_RESOLVER_VERSION = 19
+_RESOLVER_VERSION = 20
 _SCANNER_VERSION = SCAN_VERSION
 _build_locks = {}
 _build_locks_guard = threading.Lock()
