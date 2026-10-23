@@ -177,6 +177,49 @@ class BuilderTest(unittest.TestCase):
         self.assertEqual(report.files_skipped, ALL_FILES)
         resolve.assert_called_once()
 
+    def test_resolver_version_bump_rechecks_stale_qualified_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.py").write_text(
+                "def f():\n    return 'imported'\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "import lib\n\n"
+                "def f():\n    return 'local'\n\n"
+                "def caller():\n    return lib.f()\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.py")["id"]
+                call = store.find_call(callee="lib.f", file_id=file_id)
+                local_id = store.symbol_by_qualname("app.f")["id"]
+                store.conn.execute(
+                    "UPDATE calls SET callee_id = ? WHERE id = ?",
+                    (local_id, call["id"]),
+                )
+                scan_config = json.loads(store.get_meta("scan_config"))
+                scan_config["resolver_version"] = 18
+                store.set_meta("scan_config", json.dumps(scan_config))
+                store.conn.commit()
+            finally:
+                store.close()
+
+            report = build_index(cfg, quiet=True)
+            self.assertEqual(report.files_changed, 0)
+            self.assertEqual(report.files_skipped, 2)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                call = store.find_call(callee="lib.f", file_id=file_id)
+                self.assertEqual(
+                    store.symbol_by_id(call["callee_id"]).qualname, "lib.f"
+                )
+            finally:
+                store.close()
+
     def test_scanner_and_resolver_version_changes_rebuild_stale_index(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
