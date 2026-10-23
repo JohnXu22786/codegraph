@@ -49,6 +49,123 @@ class ResolverTest(unittest.TestCase):
         self.assertIsNotNone(cid)
         self.assertEqual(self.store.symbol_by_id(cid).qualname, "pkg.cart.create_cart")
 
+    def test_qualified_call_prefers_imported_symbol_over_same_file_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.py").write_text(
+                "def f():\n    return 'imported'\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "import lib\n\n"
+                "def f():\n    return 'local'\n\n"
+                "def caller():\n    return lib.f()\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.py")["id"]
+                call = store.find_call(callee="lib.f", file_id=file_id)
+                self.assertIsNotNone(call)
+                self.assertEqual(
+                    store.symbol_by_id(call["callee_id"]).qualname, "lib.f"
+                )
+            finally:
+                store.close()
+
+    def test_local_qualified_method_precedes_imported_same_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.py").write_text(
+                "def helper():\n    return 'imported'\n", encoding="utf-8")
+            (root / "app.py").write_text(
+                "import lib\n\n"
+                "class C:\n"
+                "    def helper(self):\n        return 'local'\n"
+                "    def call_self(self):\n        return self.helper()\n"
+                "def call_class():\n    return C.helper(None)\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.py")["id"]
+                for callee in ("self.helper", "C.helper"):
+                    call = store.find_call(callee=callee, file_id=file_id)
+                    self.assertIsNotNone(call)
+                    self.assertEqual(
+                        store.symbol_by_id(call["callee_id"]).qualname,
+                        "app.C.helper",
+                    )
+            finally:
+                store.close()
+
+    def test_qualified_local_owner_is_scoped_to_caller(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "lib.py").write_text(
+                "class C:\n    def helper(self):\n        return 'imported'\n",
+                encoding="utf-8",
+            )
+            (root / "app.py").write_text(
+                "from lib import C\n\n"
+                "class Outer:\n"
+                "    class C:\n"
+                "        def helper(self):\n            return 'nested'\n"
+                "    def nested_caller(self):\n        return C.helper(None)\n"
+                "def caller():\n    return C.helper(None)\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("app.py")["id"]
+                calls = store.conn.execute(
+                    "SELECT caller_name, callee_id FROM calls "
+                    "WHERE file_id = ? AND callee = ?",
+                    (file_id, "C.helper"),
+                ).fetchall()
+                resolved = {
+                    call["caller_name"]:
+                    store.symbol_by_id(call["callee_id"]).qualname
+                    for call in calls
+                }
+                self.assertEqual(
+                    resolved,
+                    {
+                        "app.Outer.nested_caller": "app.Outer.C.helper",
+                        "app.caller": "lib.C.helper",
+                    },
+                )
+            finally:
+                store.close()
+
+    def test_ambiguous_qualified_local_methods_remain_unresolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "Caller.java").write_text(
+                "package app;\nclass C {\n"
+                "    static void f() {}\n    static void f(int value) {}\n"
+                "}\nclass Caller { void invoke() { C.f(); } }\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(root=str(root))
+            cfg.engine = "quick"
+            build_index(cfg, quiet=True)
+            store = IndexStore(str(cfg.db_path))
+            try:
+                file_id = store.file_by_path("Caller.java")["id"]
+                call = store.find_call(callee="C.f", file_id=file_id)
+                self.assertIsNotNone(call)
+                self.assertIsNone(call["callee_id"])
+            finally:
+                store.close()
+
     def test_python_aliased_submodule_call_with_duplicate_symbol(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
